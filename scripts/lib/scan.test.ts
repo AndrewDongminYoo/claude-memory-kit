@@ -132,6 +132,44 @@ test("nested sub-agent/workflow child transcripts are NOT mined (main-session on
   );
 });
 
+test("useInternalTimestamps catches an old session whose mtime was reset (worktree)", () => {
+  // Simulate a copied worktree: recent mtime (warm) but old internal session time.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-proj-"));
+  const dir = path.join(root, "proj");
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, "old-session.jsonl");
+  const internalIso = new Date(NOW - 40 * DAY_MS).toISOString();
+  fs.writeFileSync(
+    f,
+    JSON.stringify({ type: "user", timestamp: internalIso }) + "\n",
+  );
+  const recent = new Date(NOW - 1 * DAY_MS); // mtime reset to 1 day ago
+  fs.utimesSync(f, recent, recent);
+
+  // mtime-only: looks warm (1 day) -> not cold
+  assert.deepEqual(
+    scanCold({
+      projectsDir: root,
+      minedSessions: new Set(),
+      coldDays: 30,
+      now: NOW,
+    }).map((c) => c.session_id),
+    [],
+  );
+  // internal timestamps: true age 40 days -> cold, and flagged as internal-sourced
+  const c = scanCold({
+    projectsDir: root,
+    minedSessions: new Set(),
+    coldDays: 30,
+    now: NOW,
+    useInternalTimestamps: true,
+  });
+  assert.equal(c.length, 1);
+  assert.equal(c[0]?.session_id, "old-session");
+  assert.equal(c[0]?.ageSource, "internal");
+  assert.ok((c[0]?.ageDays ?? 0) >= 39);
+});
+
 test("missing projects dir is empty, not an error", () => {
   assert.deepEqual(
     scanCold({

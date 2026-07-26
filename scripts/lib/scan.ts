@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ageBasisMs } from "./timestamps.ts";
 
 const DAY_MS = 86_400_000;
 
@@ -10,6 +11,7 @@ export interface Candidate {
   mtimeMs: number;
   size: number;
   ageDays: number;
+  ageSource: "internal" | "mtime";
 }
 
 export interface ScanOptions {
@@ -17,17 +19,24 @@ export interface ScanOptions {
   minedSessions: Set<string>;
   coldDays: number;
   now: number;
+  /**
+   * When true, derive age from the transcript's internal session timestamp
+   * (falling back to mtime) instead of mtime alone. Required for copied /
+   * worktree config dirs where mtime was bulk-reset; costs one file read each.
+   */
+  useInternalTimestamps?: boolean;
 }
 
 /**
  * List cold, un-mined transcripts under <projectsDir>/<slug>/*.jsonl.
  *
  * A transcript is a candidate when its age >= coldDays AND its session id is
- * not in minedSessions. Deterministic given (projectsDir contents, mined, now).
- * Never reads file contents and never mutates anything.
+ * not in minedSessions. With useInternalTimestamps the age uses the earlier of
+ * the internal session time and mtime (reads the file); otherwise mtime only.
  */
 export function scanCold(opts: ScanOptions): Candidate[] {
-  const { projectsDir, minedSessions, coldDays, now } = opts;
+  const { projectsDir, minedSessions, coldDays, now, useInternalTimestamps } =
+    opts;
   if (!fs.existsSync(projectsDir)) return [];
 
   const out: Candidate[] = [];
@@ -52,7 +61,21 @@ export function scanCold(opts: ScanOptions): Candidate[] {
       }
       if (!fstat.isFile()) continue;
 
-      const ageDays = (now - fstat.mtimeMs) / DAY_MS;
+      let basisMs = fstat.mtimeMs;
+      let ageSource: Candidate["ageSource"] = "mtime";
+      if (useInternalTimestamps) {
+        let raw: string | null = null;
+        try {
+          raw = fs.readFileSync(full, "utf8");
+        } catch {
+          raw = null;
+        }
+        const basis = ageBasisMs(raw, fstat.mtimeMs);
+        if (basis !== fstat.mtimeMs) ageSource = "internal";
+        basisMs = basis;
+      }
+
+      const ageDays = (now - basisMs) / DAY_MS;
       if (ageDays < coldDays) continue; // still warm
       const session_id = entry.slice(0, -".jsonl".length);
       if (minedSessions.has(session_id)) continue; // already mined
@@ -64,6 +87,7 @@ export function scanCold(opts: ScanOptions): Candidate[] {
         mtimeMs: fstat.mtimeMs,
         size: fstat.size,
         ageDays,
+        ageSource,
       });
     }
   }

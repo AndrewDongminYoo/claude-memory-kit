@@ -5,6 +5,8 @@ import { scanCold } from "./lib/scan.ts";
 /**
  * CLI: print cold, un-mined transcript candidates as JSON to stdout.
  * COLD_DAYS env overrides the 30-day cutoff. Read-only.
+ * Uses internal session timestamps by default (correct on copied / worktree
+ * config dirs where mtime is bulk-reset); set CMK_MTIME_ONLY=1 to force mtime.
  */
 function main(): void {
   const coldDays = Number(process.env.COLD_DAYS ?? 30);
@@ -17,6 +19,7 @@ function main(): void {
     minedSessions: minedSessions(ledgerPath(root)),
     coldDays,
     now: Date.now(),
+    useInternalTimestamps: process.env.CMK_MTIME_ONLY !== "1",
   });
   process.stdout.write(JSON.stringify(candidates, null, 2) + "\n");
   process.stderr.write(
