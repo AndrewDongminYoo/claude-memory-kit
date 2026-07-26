@@ -18,7 +18,7 @@ Secondary goal: reclaim disk by removing transcripts once mined.
 
 Non-goals:
 
-- Not a capture *hook*; it runs on demand (later, a launchd *notification* may prompt a run, but never an autonomous write).
+- Not a capture _hook_; it runs on demand (later, a launchd _notification_ may prompt a run, but never an autonomous write).
 - Not an autonomous memory writer — every memory write passes a human confirm gate.
 - Not a hard-deleter — transcripts are soft-archived (recoverable), never `rm`-ed.
 - Not the shared `native-memory` CLI — that is extracted later when a second skill needs it.
@@ -74,7 +74,7 @@ The score is a weighted sum of signals extractable by scanning the jsonl lines, 
 - **negative signals** — session dominated by errors with no resolution, or pure read-only exploration, lowers the score.
 
 Weights and thresholds are constants in `score-prefilter`, tuned against a labelled sample of real transcripts during the plan's calibration step, and are covered by a unit test so a weight change that regresses a known-good/known-noise fixture fails loudly.
-The scorer emits, per candidate, a numeric score plus the matched signals, so the deep-read step (and the operator) can see *why* a transcript was surfaced.
+The scorer emits, per candidate, a numeric score plus the matched signals, so the deep-read step (and the operator) can see _why_ a transcript was surfaced.
 
 ## Deep read and memory proposal
 
@@ -83,7 +83,7 @@ For each above-threshold candidate the agent:
 - reads the transcript (chunking or summarising if it is very large, so a single huge session cannot blow the context budget);
 - extracts only **durable, non-obvious** facts — the same bar the native memory rules already set: skip what the repo/git history/CLAUDE.md already records, skip conversation-local detail;
 - classifies each fact's **scope** per `~/.claude/rules/memory-scope.md` (project vs global) and its **type** (`user` / `feedback` / `project` / `reference`);
-- **de-duplicates** against the existing `MEMORY.md` and memory files for that project (and, for global facts, against `~/.claude/rules/`), proposing an *update* to an existing entry rather than a duplicate when one already covers the topic;
+- **de-duplicates** against the existing `MEMORY.md` and memory files for that project (and, for global facts, against `~/.claude/rules/`), proposing an _update_ to an existing entry rather than a duplicate when one already covers the topic;
 - formats each as a native memory file body with correct frontmatter, ready to write verbatim on approval.
 
 Every proposed fact is **source-verified** against the transcript (SVOP): the proposal cites the transcript turn(s) it derives from, and the agent never invents dates, ids, or proper nouns not present in the session.
@@ -127,8 +127,11 @@ The skill honours the operator's hard boundary and the wiki work-de-attribution 
 - The skill ships a dry-run path exercised end-to-end against a fixture `projects/` tree, asserting: correct candidates chosen, no writes in dry-run, archive+ledger only after confirm, idempotent re-run.
 - No network, no LLM in the helper tests.
 
-## Open questions (resolve in plan or later)
+## Resolved decisions (2026-07-26)
 
-- Helper language: TypeScript-via-runner vs POSIX `sh` — decide on the first helper's complexity.
-- Whether the ledger and archive index are tracked in the `~/.claude` git repo or left untracked.
-- Scorer weights: finalize against a real labelled sample during calibration.
+- Helper language: **TypeScript**, run via a pinned runner (`tsx`), matching the operator's existing script toolkits.
+- The ledger and the archive are **not tracked** in the `~/.claude` git repo — both live under gitignored paths and hold local-only operational state.
+
+## Open questions (resolve later)
+
+- Scorer weights: finalize against a real labelled sample during calibration (plan Phase 2).
