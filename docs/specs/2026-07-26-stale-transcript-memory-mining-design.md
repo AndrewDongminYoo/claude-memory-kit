@@ -78,6 +78,8 @@ The score is a weighted sum of signals extractable by scanning the jsonl lines, 
 Weights and thresholds are constants in `score-prefilter`, tuned against a labelled sample of real transcripts during the plan's calibration step, and are covered by a unit test so a weight change that regresses a known-good/known-noise fixture fails loudly.
 The scorer emits, per candidate, a numeric score plus the matched signals, so the deep-read step (and the operator) can see _why_ a transcript was surfaced.
 
+Calibration field note (2026-07-26): scored a random 120-transcript sample of the live corpus. Score distribution min/median/max = 0 / 1.4 / 49.5; **39%** cleared the default `SCORE_MIN=6` and 41% scored zero. The top-ranked transcripts were, by inspection, genuine heavy-work sessions (dense operator corrections, decisions, commits — mostly `llm-wiki-dongminyu`), and zero-scores were trivial one-shots. The signal weights are validated as directionally correct; final `SCORE_MIN` tuning is deferred to Phase 5 once real cold transcripts exist, since 39% deep-read recall may be tightened if the operator wants fewer LLM reads per run.
+
 ## Deep read and memory proposal
 
 For each above-threshold candidate the agent:
