@@ -101,9 +101,62 @@ test("worthy session's strongest signal is operator corrections", () => {
 
 test("trivial/near-empty session scores 0", () => {
   const entries: TranscriptEntry[] = [
-    { role: "user", text: "hi", toolUses: 0 },
+    { role: "user", text: "hi", toolUses: 0, writes: [] },
   ];
   assert.equal(scoreEntries(entries).score, 0);
+});
+
+test("parseTranscript captures Write/Edit targets for self-curation detection", () => {
+  const raw = JSON.stringify({
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "writing memory" },
+        {
+          type: "tool_use",
+          name: "Write",
+          input: { file_path: "/Users/x/.claude/projects/p/memory/foo.md" },
+        },
+      ],
+    },
+  });
+  const entries = parseTranscript(raw + "\n");
+  assert.deepEqual(entries[0]?.writes, [
+    "/Users/x/.claude/projects/p/memory/foo.md",
+  ]);
+});
+
+test("a self-curated session (wrote to memory/) is dampened below an equivalent un-curated one", () => {
+  const base: TranscriptEntry[] = [
+    {
+      role: "user",
+      text: "이건 아니라 대신 이렇게. 하지 마세요.",
+      toolUses: 0,
+      writes: [],
+    },
+    {
+      role: "assistant",
+      text: "root cause found, the fix is X, committed abc1234. [PARTIAL]",
+      toolUses: 2,
+      writes: [],
+    },
+    {
+      role: "user",
+      text: "actually revert, instead do Y",
+      toolUses: 0,
+      writes: [],
+    },
+  ];
+  const curated: TranscriptEntry[] = base.map((e, i) =>
+    i === 1 ? { ...e, writes: ["/home/.claude/projects/p/memory/note.md"] } : e,
+  );
+  const plain = scoreEntries(base).score;
+  const dampened = scoreEntries(curated).score;
+  assert.equal(scoreEntries(curated).signals.selfCurated, 1);
+  assert.equal(scoreEntries(base).signals.selfCurated, 0);
+  assert.ok(dampened < plain, `curated ${dampened} should be < plain ${plain}`);
+  assert.ok(Math.abs(dampened - plain * 0.4) < 0.01, "dampen factor is 0.4");
 });
 
 test("error-heavy session with no resolution is penalized", () => {

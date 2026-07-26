@@ -6,12 +6,22 @@
  * filter: only transcripts at or above SCORE_MIN get an expensive LLM deep read.
  * Weights are tunable constants and are pinned by score.test.ts so a regression
  * that reorders a known-worthy vs known-noise fixture fails loudly.
+ *
+ * Workspace premise (2026-07-26): this workspace runs GC / memory-curation in
+ * dedicated, independent sessions. Those sessions are keyword-dense (many
+ * corrections, decisions, commits) and would saturate the top of the ranking —
+ * yet they have ALREADY written their own memory, so re-mining them yields
+ * mostly duplicates. The `selfCurated` signal detects a session that wrote to
+ * memory/rules/MEMORY.md/CLAUDE.md and dampens its score so genuinely
+ * un-curated dev sessions rank above it.
  */
 
 export interface TranscriptEntry {
   role: "user" | "assistant" | "other";
   text: string;
   toolUses: number;
+  /** file paths this turn wrote via Write/Edit/MultiEdit (for self-curation detection). */
+  writes: string[];
 }
 
 export interface Signals {
@@ -21,6 +31,8 @@ export interface Signals {
   artifact: number;
   substance: number;
   unresolvedPenalty: number;
+  /** 1 if the session curated its own memory (already captured its value), else 0. */
+  selfCurated: number;
 }
 
 export interface ScoreResult {
@@ -28,6 +40,8 @@ export interface ScoreResult {
   turns: number;
   signals: Signals;
 }
+
+const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
 /** Parse Claude Code transcript jsonl into normalized entries; skips bad lines. */
 export function parseTranscript(raw: string): TranscriptEntry[] {
@@ -53,6 +67,7 @@ export function parseTranscript(raw: string): TranscriptEntry[] {
 
     let text = "";
     let toolUses = 0;
+    const writes: string[] = [];
     const content = message.content;
     if (typeof content === "string") {
       text = content;
@@ -60,12 +75,22 @@ export function parseTranscript(raw: string): TranscriptEntry[] {
       for (const block of content) {
         if (typeof block !== "object" || block === null) continue;
         const b = block as Record<string, unknown>;
-        if (b.type === "text" && typeof b.text === "string")
+        if (b.type === "text" && typeof b.text === "string") {
           text += b.text + "\n";
-        else if (b.type === "tool_use") toolUses += 1;
+        } else if (b.type === "tool_use") {
+          toolUses += 1;
+          if (
+            WRITE_TOOLS.has(String(b.name)) &&
+            b.input &&
+            typeof b.input === "object"
+          ) {
+            const fp = (b.input as Record<string, unknown>).file_path;
+            if (typeof fp === "string") writes.push(fp);
+          }
+        }
       }
     }
-    entries.push({ role, text, toolUses });
+    entries.push({ role, text, toolUses, writes });
   }
   return entries;
 }
@@ -92,6 +117,10 @@ const ERROR = /\berror\b|\bfailed\b|\bexception\b|\btraceback\b/gi;
 const RESOLUTION =
   /\bfixed\b|\bresolved\b|\bpasses\b|\bworks now\b|\bgreen\b|\bsucceed/gi;
 
+/** A write target that means the session curated its own memory. */
+const CURATION_TARGET =
+  /\/memory\/|\/rules\/|MEMORY\.md$|CLAUDE\.md$|\.claude\/rules/;
+
 const WEIGHTS = {
   correction: 5,
   decision: 2,
@@ -100,16 +129,20 @@ const WEIGHTS = {
   substance: 1, // per (turns/10), capped
 } as const;
 
+// Caps raised (2026-07-26) so heavy sessions spread out instead of saturating.
 const CAPS = {
-  correction: 4,
-  decision: 6,
-  honesty: 5,
-  artifact: 4,
-  substance: 3,
+  correction: 6,
+  decision: 10,
+  honesty: 8,
+  artifact: 6,
+  substance: 5,
 } as const;
 
+/** Score multiplier for a self-curated session (its value is already in memory). */
+const SELF_CURATED_DAMPEN = 0.4;
+
 /** Default triage threshold; transcripts below this skip the LLM deep read. */
-export const SCORE_MIN = 6;
+export const SCORE_MIN = 12;
 
 function countMatches(text: string, re: RegExp): number {
   const m = text.match(re);
@@ -126,6 +159,9 @@ export function scoreEntries(entries: TranscriptEntry[]): ScoreResult {
     (e) => e.role === "user" || e.role === "assistant",
   ).length;
   const toolUses = entries.reduce((n, e) => n + e.toolUses, 0);
+  const selfCurated = entries.some((e) =>
+    e.writes.some((p) => CURATION_TARGET.test(p)),
+  );
 
   // Corrections only count from user turns (an operator steering the agent).
   const corrections = Math.min(
@@ -152,9 +188,10 @@ export function scoreEntries(entries: TranscriptEntry[]): ScoreResult {
     artifact: artifacts,
     substance: Number(substance.toFixed(2)),
     unresolvedPenalty,
+    selfCurated: selfCurated ? 1 : 0,
   };
 
-  const score = trivial
+  const raw = trivial
     ? 0
     : Math.max(
         0,
@@ -165,6 +202,10 @@ export function scoreEntries(entries: TranscriptEntry[]): ScoreResult {
           substance * WEIGHTS.substance +
           unresolvedPenalty,
       );
+
+  // Self-curated sessions already wrote their memory — dampen so un-curated
+  // dev sessions outrank them (workspace premise, 2026-07-26).
+  const score = selfCurated ? raw * SELF_CURATED_DAMPEN : raw;
 
   return { score: Number(score.toFixed(2)), turns, signals };
 }

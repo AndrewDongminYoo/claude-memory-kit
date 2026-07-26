@@ -73,12 +73,20 @@ The score is a weighted sum of signals extractable by scanning the jsonl lines, 
 - **decision / post-mortem keywords** — `root cause`, `decided`, `turns out`, `the fix`, `gotcha`, `TIL`, `remember`, honesty markers (`[UNKNOWN]`, `[PARTIAL]`).
 - **durable-artifact signals** — git commit hashes / `git commit` invocations, file writes to tracked config, PR / release actions.
 - **substance proxies** — assistant/user turn count and tool-use density above a floor (filters trivial one-shot Q&A).
-- **negative signals** — session dominated by errors with no resolution, or pure read-only exploration, lowers the score.
+- **negative signals** — session dominated by errors with no resolution lowers the score.
+- **self-curated dampening** — a session that wrote to `**/memory/`, `**/rules/`, `MEMORY.md`, or `CLAUDE.md` has already captured its own value; its score is multiplied by 0.4 so genuinely un-curated dev sessions outrank it. This is the **workspace-premise** adjustment: this workspace runs GC / memory-curation in dedicated independent sessions, which are keyword-dense and would otherwise saturate the top with already-captured material.
 
 Weights and thresholds are constants in `score-prefilter`, tuned against a labelled sample of real transcripts during the plan's calibration step, and are covered by a unit test so a weight change that regresses a known-good/known-noise fixture fails loudly.
 The scorer emits, per candidate, a numeric score plus the matched signals, so the deep-read step (and the operator) can see _why_ a transcript was surfaced.
 
-Calibration field note (2026-07-26): scored a random 120-transcript sample of the live corpus. Score distribution min/median/max = 0 / 1.4 / 49.5; **39%** cleared the default `SCORE_MIN=6` and 41% scored zero. The top-ranked transcripts were, by inspection, genuine heavy-work sessions (dense operator corrections, decisions, commits — mostly `llm-wiki-dongminyu`), and zero-scores were trivial one-shots. The signal weights are validated as directionally correct; final `SCORE_MIN` tuning is deferred to Phase 5 once real cold transcripts exist, since 39% deep-read recall may be tightened if the operator wants fewer LLM reads per run.
+Calibration v1 (2026-07-26): scored a random 120-transcript sample. Distribution 0 / 1.4 / 49.5; **39%** cleared `SCORE_MIN=6`; top scorers were genuine heavy-work sessions, but the top **saturated at 52** (all caps hit), so heavy sessions could not be ranked against each other.
+
+Calibration v2 (2026-07-26), after the `COLD_DAYS=7` demo over 763 candidates:
+
+- **Caps raised** (`correction 6, decision 10, honesty 8, artifact 6, substance 5`) — the top de-saturated (max 76.5, one session at max, versus a large tie at 52 before).
+- **`SCORE_MIN` raised to 12** — above-threshold share fell from 35% to 31%, trimming LLM deep-read cost while keeping high recall.
+- **Self-curated dampening added** (see above) — 41 native-memory-writing sessions were detected and dampened. Note: `llm-wiki-dongminyu` sessions still rank at the top and are _not_ flagged, correctly — they curate the wiki store, not `~/.claude` native memory, so their native-memory-worthy operator feedback may be un-captured; dedup at deep-read time handles any redundancy.
+- Remaining item: heavy sessions that hit every cap still tie; a turn-count or size tiebreaker is deferred.
 
 ## Deep read and memory proposal
 
