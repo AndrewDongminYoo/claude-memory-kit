@@ -5,6 +5,33 @@ A Claude Code plugin bundling on-demand skills for managing Claude Code's native
 This is **not** a capture hook like `claude-mem` or `remember`.
 It works with the native, human-in-the-loop memory model: you invoke a skill, its deterministic helpers gather candidates, the LLM proposes changes, and nothing is written or moved until you confirm it.
 
+## Why
+
+Every Claude Code session leaves a transcript under `~/.claude/projects/` — and that directory only grows (easily hundreds of files and hundreds of MB).
+Buried in those transcripts are the corrections you gave once and had to give again, the decisions that never made it into memory, the gotchas a session learned the hard way and then forgot.
+When a session goes cold, that knowledge dies with it — unless you mine it first.
+
+A run looks like this from your side:
+
+```log
+> /claude-memory-kit:mine-stale-transcripts
+
+Scanned 214 cold transcripts (30+ days old, never mined) across 12 projects.
+Prefilter: 9 worth an LLM read; the rest ledgered as low-score.
+
+3 memory proposals from those 9 sessions:
+
+[my-app] project · new file: ios-build-cache.md
+  "Xcode incremental builds break after `pod install`; wipe DerivedData
+   first. Decided in session 2026-05-12 after two failed fixes."
+  Evidence: turns 41–44 (your correction), turn 58 (working fix)
+
+Approve, edit, or reject each — nothing is written or archived until you say so.
+```
+
+You approve the entries worth keeping, and the next session in that project starts already knowing them.
+The processed transcripts move to a recoverable archive, so `~/.claude/projects/` shrinks without a single byte deleted.
+
 ## Installation
 
 This repo is its own plugin marketplace (`.claude-plugin/marketplace.json`).
