@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "for f in scripts/*.test.ts; do tsx \"$f\" || exit 1; done"
+    "test": "node --import tsx --test \"scripts/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
