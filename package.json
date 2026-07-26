@@ -1,0 +1,19 @@
+{
+  "name": "claude-memory-kit",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "On-demand skills for managing Claude Code native memory",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "for f in scripts/*.test.ts; do tsx \"$f\" || exit 1; done"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "claude-memory-kit",
+  "version": "0.0.1",
+  "description": "On-demand skills for managing Claude Code native file-based memory: mine stale transcripts into memory, merge split-path memory, promote repeated rules, and review per-project config.",
+  "author": "Dongmin Yu"
+}
