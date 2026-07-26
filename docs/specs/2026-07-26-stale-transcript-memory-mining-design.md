@@ -61,7 +61,9 @@ The helpers read only `~/.claude`; they never call an LLM and never delete.
 - Cross-path duplicates: the same logical project can appear under `-Users-…` and `-Volumes-…` slugs (the #2 problem).
   This skill does **not** merge them — it treats each slug dir independently and writes any resulting memory into that same slug's `memory/`.
   Consolidating split memory is #2's job; this skill must not pre-empt it.
-- Only `projects/**/*.jsonl` are in scope. `history.jsonl`, `shell-snapshots/`, `todos/`, `sessions/` and other ephemeral state are out of scope for this slice (they belong to #6).
+- **Main-session transcripts only** (`projects/<slug>/*.jsonl`, one level deep). Verified 2026-07-26: `projects/` holds 903 main-session transcripts plus ~769 nested `…/<session>/subagents/**.jsonl` sub-agent and workflow-agent child transcripts. The nested children are **out of scope for mining** — their knowledge is already reflected in the parent session, and they are noise-heavy internal delegation. They are pure disk (a #6 / disk-GC concern), removed with their parent's archival, not mined.
+- `history.jsonl`, `shell-snapshots/`, `todos/`, `sessions/` and other ephemeral state are also out of scope (they belong to #6).
+- Field note (2026-07-26): the oldest transcript on disk is ~22 days, so at the default `COLD_DAYS=30` there are currently zero candidates — expected, not a bug. First live runs will either wait for sessions to age past 30 days or lower `COLD_DAYS` deliberately.
 
 ## Cheap prefilter scoring (no LLM)
 
