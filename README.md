@@ -9,9 +9,9 @@ See `docs/notes/` for the suite decomposition, `docs/specs/` for per-slice desig
 
 ## Skills
 
-| Skill                    | Status      | Purpose                                                                                                   |
-| ------------------------ | ----------- | --------------------------------------------------------------------------------------------------------- |
-| `mine-stale-transcripts` | in progress | Review cold session transcripts, capture memory-worthy value with a confirm gate, then soft-archive them. |
+| Skill                    | Status                        | Purpose                                                                                                   |
+| ------------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `mine-stale-transcripts` | built; pending first live run | Review cold session transcripts, capture memory-worthy value with a confirm gate, then soft-archive them. |
 
 Planned: merge split-path memory, promote repeated rules, review per-project config, quarantine `~/.claude` noise.
 

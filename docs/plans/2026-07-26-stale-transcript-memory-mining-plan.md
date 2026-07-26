@@ -1,8 +1,18 @@
 # Implementation plan — `mine-stale-transcripts` (slice #4)
 
 Date: 2026-07-26
-Status: proposed (awaiting operator review)
+Status: in progress — Phases 0–4 built and tested; Phases 5–6 gated on real cold data
 Design: `docs/specs/2026-07-26-stale-transcript-memory-mining-design.md`
+
+## Progress (2026-07-26)
+
+- Phase 0 — scaffold: **done** (TypeScript plugin, tsx/tsc/prettier gate).
+- Phase 1 — scan + ledger: **done** (main-session-only scanner, append-only ledger, 9 tests).
+- Phase 2 — prefilter scorer: **done** (no-LLM signal scorer, calibrated on a 120-transcript live sample, worthy-vs-noise ranking pinned).
+- Phase 3 — skill orchestration: **done** (`SKILL.md` wires scan → score → deep-read → confirm → write → ledger → archive with the guardrails).
+- Phase 4 — soft-archive + write path: **archive helper done** (move-not-delete, collision-safe, 16 tests total).
+- Phase 5 — real dry-run calibration: **blocked** — the oldest transcript on disk is ~22 days, so at `COLD_DAYS=30` there are zero candidates. Run once sessions age past 30 days, or lower `COLD_DAYS` deliberately for a first pass.
+- Phase 6 — first live mining run: **gated** on Phase 5 and operator presence (it writes memory and archives).
 
 ## Success criteria
 
