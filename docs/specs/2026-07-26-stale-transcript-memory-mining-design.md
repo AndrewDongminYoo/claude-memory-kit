@@ -89,6 +89,8 @@ Calibration v2 (2026-07-26), after the `COLD_DAYS=7` demo over 763 candidates:
 - **Self-curated dampening added** (see above) — 41 native-memory-writing sessions were detected and dampened. Note: `llm-wiki-dongminyu` sessions still rank at the top and are _not_ flagged, correctly — they curate the wiki store, not `~/.claude` native memory, so their native-memory-worthy operator feedback may be un-captured; dedup at deep-read time handles any redundancy.
 - Remaining item: heavy sessions that hit every cap still tie; a turn-count or size tiebreaker is deferred.
 
+Calibration v3 (2026-07-26), after the first live mining batch on the external-volume worktree: the two **highest** scorers were scorer false-positives that the deep-read correctly rejected — a deep-research "expert research analyst" query (its output is a wiki page, not native memory) and an `/insights` usage-report session (generated analysis, not an operator decision). These automated-analysis sessions are keyword-dense (decisions/verdicts in their generated prose) but hold no native-memory-worthy operator feedback. Candidate future signal: treat a first-user-turn matching `expert research analyst` / `/insights` / `produce a structured analysis` as a negative signal, the same way `selfCurated` is. Not yet implemented — recorded so the pattern is not re-discovered. Live yield this batch: 1 memory-worthy of 4 above-threshold, confirming the deep-read + confirm gate, not the scorer, is what guards precision.
+
 ## Deep read and memory proposal
 
 For each above-threshold candidate the agent:
