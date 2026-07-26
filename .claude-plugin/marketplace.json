@@ -1,0 +1,14 @@
+{
+  "name": "claude-memory-kit",
+  "owner": {
+    "name": "Dongmin Yu",
+    "url": "https://github.com/AndrewDongminYoo"
+  },
+  "plugins": [
+    {
+      "name": "claude-memory-kit",
+      "source": "./",
+      "description": "On-demand skills for managing Claude Code native file-based memory: mine stale transcripts into memory, merge split-path memory, promote repeated rules, and review per-project config."
+    }
+  ]
+}

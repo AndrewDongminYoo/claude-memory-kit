@@ -5,6 +5,24 @@ A Claude Code plugin bundling on-demand skills for managing Claude Code's native
 This is **not** a capture hook like `claude-mem` or `remember`.
 It works with the native, human-in-the-loop memory model: you invoke a skill, its deterministic helpers gather candidates, the LLM proposes changes, and nothing is written or moved until you confirm it.
 
+## Installation
+
+This repo is its own plugin marketplace (`.claude-plugin/marketplace.json`).
+In Claude Code:
+
+```log
+/plugin marketplace add AndrewDongminYoo/claude-memory-kit
+/plugin install claude-memory-kit@claude-memory-kit
+```
+
+For local development, load it directly without a marketplace:
+
+```bash
+claude --plugin-dir /path/to/claude-memory-kit
+```
+
+Skills are namespaced once installed, e.g. `/claude-memory-kit:mine-stale-transcripts`.
+
 ## Skills
 
 | Skill                    | Status                        | Purpose                                                                                                   |
