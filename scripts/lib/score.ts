@@ -213,3 +213,43 @@ export function scoreEntries(entries: TranscriptEntry[]): ScoreResult {
 export function scoreTranscript(raw: string): ScoreResult {
   return scoreEntries(parseTranscript(raw));
 }
+
+/** Default cap on how many transcripts of one project earn a deep read. */
+export const MAX_PER_PROJECT = 5;
+
+export interface Selectable {
+  /** `<projectsDir>/<slug>/<session>.jsonl` — the slug is the grouping key. */
+  path: string;
+  score: number;
+}
+
+/**
+ * Pick the transcripts that earn an expensive LLM deep read: at or above
+ * SCORE_MIN, highest score first, at most `cap` per project.
+ *
+ * Why a cap rather than a higher threshold (measured 2026-08-05, 583-candidate
+ * corpus): raising SCORE_MIN does not spread the batch out, it concentrates it.
+ * At SCORE_MIN=12, 80% of the 155 above-threshold transcripts came from one
+ * project; at 70 it was 98%. The score saturates on long sessions (every cap
+ * maxed), so it cannot rank within a project — but it does separate projects.
+ * The per-project cap is therefore the lever that diversifies the batch:
+ * cap 5 turned 155 deep reads into 21 across 5 projects.
+ *
+ * `cap <= 0` disables the cap.
+ */
+export function selectForDeepRead<T extends Selectable>(
+  rows: T[],
+  cap: number = MAX_PER_PROJECT,
+): T[] {
+  const seen = new Map<string, number>();
+  const out: T[] = [];
+  for (const row of [...rows].sort((a, b) => b.score - a.score)) {
+    if (row.score < SCORE_MIN) continue;
+    const slug = row.path.split("/").at(-2) ?? "";
+    const taken = seen.get(slug) ?? 0;
+    if (cap > 0 && taken >= cap) continue;
+    seen.set(slug, taken + 1);
+    out.push(row);
+  }
+  return out;
+}

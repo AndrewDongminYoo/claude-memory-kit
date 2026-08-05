@@ -4,6 +4,7 @@ import {
   parseTranscript,
   scoreTranscript,
   scoreEntries,
+  selectForDeepRead,
   SCORE_MIN,
   type TranscriptEntry,
 } from "./score.ts";
@@ -157,6 +158,26 @@ test("a self-curated session (wrote to memory/) is dampened below an equivalent 
   assert.equal(scoreEntries(base).signals.selfCurated, 0);
   assert.ok(dampened < plain, `curated ${dampened} should be < plain ${plain}`);
   assert.ok(Math.abs(dampened - plain * 0.4) < 0.01, "dampen factor is 0.4");
+});
+
+test("selectForDeepRead drops below-threshold rows and caps each project", () => {
+  const rows = [
+    { path: "/p/alpha/1.jsonl", score: 90 },
+    { path: "/p/alpha/2.jsonl", score: 80 },
+    { path: "/p/alpha/3.jsonl", score: 70 },
+    { path: "/p/beta/1.jsonl", score: 60 },
+    { path: "/p/beta/2.jsonl", score: SCORE_MIN - 1 },
+  ];
+  assert.deepEqual(
+    selectForDeepRead(rows, 2).map((r) => r.path),
+    ["/p/alpha/1.jsonl", "/p/alpha/2.jsonl", "/p/beta/1.jsonl"],
+    "highest score first, 2 per project, nothing below SCORE_MIN",
+  );
+  assert.equal(
+    selectForDeepRead(rows, 0).length,
+    4,
+    "cap 0 disables the cap but keeps the threshold",
+  );
 });
 
 test("error-heavy session with no resolution is penalized", () => {
