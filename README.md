@@ -63,12 +63,12 @@ See `docs/notes/` for the suite decomposition, `docs/specs/` for per-slice desig
 
 ```log
 scan-cold ──▶ score-prefilter ──▶ LLM deep read ──▶ batch confirm ──▶ write memory ──▶ ledger + soft-archive
-(read-only)   (read-only, no LLM)  (above-threshold)  (operator gate)   (approved only)   (move, never delete)
+(read-only)   (read-only, no LLM)  (selected only)   (operator gate)   (approved only)   (move, never delete)
 ```
 
-1. **Scan** — list cold (default 30+ days), un-mined main-session transcripts. Age is derived from the transcript's internal session timestamp, so bulk-reset `mtime` on copied or worktree config dirs doesn't resurrect old sessions as fresh.
-2. **Prefilter** — a cheap, deterministic score (corrections, decisions, artifacts, substance) triages which transcripts earn an expensive LLM read. Sessions that already curated their own memory are dampened so un-curated dev sessions rank first.
-3. **Deep read and propose** — the LLM reads each above-threshold transcript and proposes memory entries, each source-verified against specific transcript turns, scoped (project vs global), and de-duplicated against existing memory.
+1. **Scan** — list cold (default 14+ days), un-mined main-session transcripts. Age is derived from the transcript's internal session timestamp, so bulk-reset `mtime` on copied or worktree config dirs doesn't resurrect old sessions as fresh. Finding nothing prints the corpus age span, because zero candidates is also what a retention collision looks like.
+2. **Prefilter** — a cheap, deterministic score (corrections, decisions, artifacts, substance) triages which transcripts earn an expensive LLM read. Sessions that already curated their own memory are dampened so un-curated dev sessions rank first, and a per-project cap keeps one busy project from consuming the whole batch.
+3. **Deep read and propose** — the LLM reads each selected transcript and proposes memory entries, each source-verified against specific transcript turns, scoped (project vs global), and de-duplicated against existing memory.
 4. **Confirm** — all proposals are presented for approval; the default run is a dry-run that stops here.
 5. **Write, ledger, archive** — approved entries are written to native memory; every processed transcript is recorded in an append-only ledger and moved (never deleted) to `~/.claude/.transcript-archive/<slug>/`.
 
@@ -83,10 +83,24 @@ scan-cold ──▶ score-prefilter ──▶ LLM deep read ──▶ batch conf
 
 | Knob                | Default         | Meaning                                                      |
 | ------------------- | --------------- | ------------------------------------------------------------ |
-| `COLD_DAYS`         | `30`            | Minimum age in days for a transcript to be a candidate.      |
+| `COLD_DAYS`         | `14`            | Minimum age in days for a transcript to be a candidate.      |
+| `MAX_PER_PROJECT`   | `5`             | Cap on deep reads per project; `0` disables the cap.         |
 | `CMK_MTIME_ONLY`    | unset           | Set to `1` to force `mtime`-based age (skip internal parse). |
 | `CLAUDE_CONFIG_DIR` | `~/.claude`     | Root of the Claude config tree the scripts operate on.       |
 | `SCORE_MIN`         | `12` (constant) | Prefilter threshold in `scripts/lib/score.ts`, test-pinned.  |
+
+#### `COLD_DAYS` must stay under your retention window
+
+Claude Code deletes old transcripts on its own schedule (`cleanupPeriodDays` in `settings.json`, 30 by default).
+If `COLD_DAYS` reaches that limit, a transcript becomes eligible for mining at the same moment retention deletes it, and the scan returns zero forever — a silent structural failure, not an empty backlog.
+Measured on a 2267-transcript corpus (2026-08-05): `COLD_DAYS=30` yielded 0 candidates, `COLD_DAYS=14` yielded 786.
+The default is 14 for that reason, and `scan-cold` prints the corpus age span whenever it finds nothing, so the collision is visible instead of silent.
+
+#### Why a per-project cap instead of a higher threshold
+
+The prefilter score separates projects but saturates within one — long sessions max every signal cap, so the top of the ranking flattens.
+On the same corpus, 80% of the 155 above-threshold transcripts came from a single project, and raising `SCORE_MIN` concentrated the batch further (98% at 70) rather than trimming it.
+`MAX_PER_PROJECT` is the lever that actually diversifies the batch: cap 5 turned 155 deep reads into 21 across 5 projects.
 
 State lives in gitignored paths inside `~/.claude`: the mining ledger at `.claude-memory-kit/mining-ledger.jsonl` and the archive at `.transcript-archive/`.
 

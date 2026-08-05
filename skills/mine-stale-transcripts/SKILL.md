@@ -31,28 +31,47 @@ transcripts are in scope (the scanner already enforces this).
 ### 1. Scan for candidates (read-only)
 
 ```bash
-tsx "${CLAUDE_PLUGIN_ROOT}/scripts/scan-cold.ts"    # COLD_DAYS=30 default
+tsx "${CLAUDE_PLUGIN_ROOT}/scripts/scan-cold.ts"    # COLD_DAYS=14 default
 ```
 
-Emits cold (`mtime` age >= `COLD_DAYS`), un-mined (absent from the ledger)
-main-session transcripts as JSON, oldest first. Zero candidates is a normal,
-valid outcome — stop and say so.
+Emits cold (age >= `COLD_DAYS`), un-mined (absent from the ledger) main-session
+transcripts as JSON, oldest first.
+
+Zero candidates can be normal, but it is also what a **retention collision**
+looks like: if the harness deletes transcripts at `cleanupPeriodDays` before
+`COLD_DAYS` elapses, the mining window is empty by construction and no amount of
+running the skill will ever find anything. On zero the scanner prints the corpus
+age span for exactly this reason — **read it before reporting.** When the oldest
+transcript sits at roughly `COLD_DAYS`, say so and name the fix (raise
+`cleanupPeriodDays`, or lower `COLD_DAYS`); do not report it as "nothing to
+mine".
 
 ### 2. Prefilter score (read-only, no LLM)
 
-Score the candidate paths; only those at or above `SCORE_MIN` earn an LLM read:
+Score the candidate paths; only the `selected` ones earn an LLM read:
 
 ```bash
 tsx "${CLAUDE_PLUGIN_ROOT}/scripts/score-prefilter.ts" <path1> <path2> ...
 ```
 
-Each line reports `score`, `above`, `turns`, and the matched `signals` (so you and
-the operator can see _why_ a transcript surfaced). Below-threshold candidates are
-**not** read; they are ledgered `skipped-low-score` and archived in step 6.
+Each line reports `score`, `turns`, the matched `signals` (so you and the
+operator can see _why_ a transcript surfaced), and two flags:
 
-### 3. Deep read and propose (LLM, above-threshold only)
+- `above` — cleared `SCORE_MIN`.
+- `selected` — cleared `SCORE_MIN` **and** survived the per-project cap
+  (`MAX_PER_PROJECT`, default 5). This is the deep-read set.
 
-For each above-threshold transcript, read it (summarise-then-mine if it is very
+The cap exists because the score saturates on long sessions and cannot rank
+within a project: on a real corpus one project supplied 80% of the
+above-threshold transcripts, and raising `SCORE_MIN` made that worse (98%), not
+better. Do not "fix" a lopsided batch by raising the threshold.
+
+Candidates that are not `selected` are **not** read; they are ledgered
+`skipped-low-score` and archived in step 6.
+
+### 3. Deep read and propose (LLM, selected only)
+
+For each selected transcript, read it (summarise-then-mine if it is very
 large so one session cannot blow the context budget) and propose zero or more
 memory entries. For every proposed fact:
 
@@ -105,8 +124,8 @@ Archiving moves the transcript to `~/.claude/.transcript-archive/<slug>/`
 
 ### 7. Report
 
-Summarise: candidates scanned, above-threshold, memory written (with paths),
-skipped, and bytes moved to archive. Note that the archive is recoverable and
+Summarise: candidates scanned, above-threshold, selected for deep read, memory
+written (with paths), skipped, and bytes moved to archive. Note that the archive is recoverable and
 that pruning it is a later, separate decision.
 
 ## Hard rules
