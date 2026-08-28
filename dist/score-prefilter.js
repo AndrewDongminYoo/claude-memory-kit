@@ -3,9 +3,12 @@ import path from "node:path";
 import { projectsDir, resolveClaudeRoot } from "./lib/paths.js";
 import { isUnreadableTranscript, parseMaxPerProject, scoreTranscript, selectForDeepRead, SCORE_MIN, } from "./lib/score.js";
 import { assertDirectTranscriptPath, assertSlugInScope, openSafeTranscriptFile, parseScopeSlugPrefixes, } from "./lib/scope.js";
-function isRecoverableTranscriptReadError(error) {
-    const code = error?.code;
-    return code === "EACCES" || code === "ENOENT" || code === "EPERM";
+function transcriptReadErrorCode(error) {
+    return error?.code;
+}
+function isUnreadableTranscriptReadError(error) {
+    const code = transcriptReadErrorCode(error);
+    return code === "EACCES" || code === "EPERM";
 }
 function unreadableRow(transcriptPath, slug, error) {
     return {
@@ -13,6 +16,15 @@ function unreadableRow(transcriptPath, slug, error) {
         slug,
         score: 0,
         unreadable: true,
+        error: error instanceof Error ? error.message : String(error),
+    };
+}
+function missingRow(transcriptPath, slug, error) {
+    return {
+        path: transcriptPath,
+        slug,
+        score: 0,
+        missing: true,
         error: error instanceof Error ? error.message : String(error),
     };
 }
@@ -42,7 +54,10 @@ function main() {
             descriptor = openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir);
         }
         catch (error) {
-            if (isRecoverableTranscriptReadError(error)) {
+            if (transcriptReadErrorCode(error) === "ENOENT") {
+                return missingRow(transcriptPath, slug, error);
+            }
+            if (isUnreadableTranscriptReadError(error)) {
                 return unreadableRow(transcriptPath, slug, error);
             }
             throw error;

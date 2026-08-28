@@ -31,13 +31,18 @@ interface Row {
   score: number;
   turns?: number;
   unreadable?: boolean;
+  missing?: boolean;
   error?: string;
   [key: string]: unknown;
 }
 
-function isRecoverableTranscriptReadError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "EACCES" || code === "ENOENT" || code === "EPERM";
+function transcriptReadErrorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | undefined)?.code;
+}
+
+function isUnreadableTranscriptReadError(error: unknown): boolean {
+  const code = transcriptReadErrorCode(error);
+  return code === "EACCES" || code === "EPERM";
 }
 
 function unreadableRow(
@@ -50,6 +55,16 @@ function unreadableRow(
     slug,
     score: 0,
     unreadable: true,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function missingRow(transcriptPath: string, slug: string, error: unknown): Row {
+  return {
+    path: transcriptPath,
+    slug,
+    score: 0,
+    missing: true,
     error: error instanceof Error ? error.message : String(error),
   };
 }
@@ -86,7 +101,10 @@ function main(): void {
         configuredProjectsDir,
       );
     } catch (error) {
-      if (isRecoverableTranscriptReadError(error)) {
+      if (transcriptReadErrorCode(error) === "ENOENT") {
+        return missingRow(transcriptPath, slug, error);
+      }
+      if (isUnreadableTranscriptReadError(error)) {
         return unreadableRow(transcriptPath, slug, error);
       }
       throw error;

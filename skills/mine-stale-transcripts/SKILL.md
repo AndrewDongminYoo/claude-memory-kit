@@ -63,6 +63,8 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/score-prefilter.js" <path1> <path2>
 Read only rows marked `selected` for the deep-read step.
 Treat a row marked `unreadable` as a preservation problem, not low-score noise.
 Do not deep-read or archive an unreadable transcript.
+Treat a row marked `missing` as a non-finalizable race result.
+Do not deep-read, archive, or ledger it.
 
 After the operator agrees to record the result, preserve its source file and write only its ledger outcome.
 

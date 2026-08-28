@@ -14,10 +14,17 @@ const scorePrefilter = path.join(
 function runScorePrefilter(
   files: string[],
   env: NodeJS.ProcessEnv = process.env,
+  preloadPaths: string[] = [],
 ) {
   return childProcess.spawnSync(
     process.execPath,
-    ["--import", "tsx", scorePrefilter, ...files],
+    [
+      "--import",
+      "tsx",
+      ...preloadPaths.flatMap((preloadPath) => ["--import", preloadPath]),
+      scorePrefilter,
+      ...files,
+    ],
     {
       encoding: "utf8",
       env: {
@@ -80,7 +87,7 @@ test("reports malformed JSONL as unreadable and never selects it", () => {
   assert.equal(row.selected, false);
 });
 
-test("reports a removed in-scope transcript as unreadable and scores the batch", () => {
+test("reports a removed in-scope transcript as missing and scores the batch", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
   const transcript = path.join(
     root,
@@ -97,9 +104,58 @@ test("reports a removed in-scope transcript as unreadable and scores the batch",
 
   assert.equal(result.status, 0, result.stderr);
   const row = JSON.parse(result.stdout) as Record<string, unknown>;
-  assert.equal(row.unreadable, true);
+  assert.equal(row.missing, true);
+  assert.equal(row.unreadable, undefined);
   assert.equal(row.selected, false);
   assert.match(String(row.error), /ENOENT/);
+});
+
+test("reports access-denied transcripts as unreadable instead of missing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
+  const transcript = path.join(
+    root,
+    "projects",
+    "cmk-score-cli-project",
+    "restricted.jsonl",
+  );
+  const preloadPath = path.join(root, "mock-open.mjs");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "PAYLOAD\n");
+  fs.writeFileSync(
+    preloadPath,
+    [
+      'import fs from "node:fs";',
+      "const originalOpenSync = fs.openSync;",
+      "fs.openSync = (pathname, flags, mode) => {",
+      "  if (String(pathname) === process.env.CMK_TEST_OPEN_PATH) {",
+      "    const error = new Error(`mock ${process.env.CMK_TEST_OPEN_ERROR}`);",
+      "    error.code = process.env.CMK_TEST_OPEN_ERROR;",
+      "    throw error;",
+      "  }",
+      "  return originalOpenSync(pathname, flags, mode);",
+      "};",
+    ].join("\n"),
+  );
+
+  for (const code of ["EACCES", "EPERM"]) {
+    const result = runScorePrefilter(
+      [transcript],
+      {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: root,
+        CMK_TEST_OPEN_PATH: transcript,
+        CMK_TEST_OPEN_ERROR: code,
+      },
+      [preloadPath],
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const row = JSON.parse(result.stdout) as Record<string, unknown>;
+    assert.equal(row.unreadable, true);
+    assert.equal(row.missing, undefined);
+    assert.equal(row.selected, false);
+    assert.match(String(row.error), new RegExp(code));
+  }
 });
 
 test("rejects a fractional MAX_PER_PROJECT before reading transcripts", () => {
