@@ -2,12 +2,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { projectsDir, resolveClaudeRoot } from "./lib/paths.js";
 import { isUnreadableTranscript, parseMaxPerProject, scoreTranscript, selectForDeepRead, SCORE_MIN, } from "./lib/score.js";
-import { assertSlugInScope, openSafeTranscriptFile, parseScopeSlugPrefixes, } from "./lib/scope.js";
+import { assertDirectTranscriptPath, assertSlugInScope, openSafeTranscriptFile, parseScopeSlugPrefixes, } from "./lib/scope.js";
+function isRecoverableTranscriptReadError(error) {
+    const code = error?.code;
+    return code === "EACCES" || code === "ENOENT" || code === "EPERM";
+}
+function unreadableRow(transcriptPath, slug, error) {
+    return {
+        path: transcriptPath,
+        slug,
+        score: 0,
+        unreadable: true,
+        error: error instanceof Error ? error.message : String(error),
+    };
+}
 function main() {
     const scopePrefixes = parseScopeSlugPrefixes();
     const configuredProjectsDir = projectsDir(resolveClaudeRoot());
     const transcriptPaths = [
-        ...new Set(process.argv.slice(2).filter((argument) => !argument.startsWith("--"))),
+        ...new Set(process.argv
+            .slice(2)
+            .filter((argument) => !argument.startsWith("--"))
+            .map((argument) => path.resolve(argument))),
     ];
     if (transcriptPaths.length === 0) {
         process.stderr.write("usage: score-prefilter <transcript.jsonl> ...\n");
@@ -17,10 +33,20 @@ function main() {
     const scopedPaths = transcriptPaths.map((transcriptPath) => {
         const slug = path.basename(path.dirname(transcriptPath));
         assertSlugInScope(slug, scopePrefixes);
+        assertDirectTranscriptPath(transcriptPath, slug, configuredProjectsDir);
         return { transcriptPath, slug };
     });
     const rows = scopedPaths.map(({ transcriptPath, slug }) => {
-        const descriptor = openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir);
+        let descriptor;
+        try {
+            descriptor = openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir);
+        }
+        catch (error) {
+            if (isRecoverableTranscriptReadError(error)) {
+                return unreadableRow(transcriptPath, slug, error);
+            }
+            throw error;
+        }
         try {
             const raw = fs.readFileSync(descriptor, "utf8");
             if (isUnreadableTranscript(raw)) {
@@ -35,16 +61,12 @@ function main() {
             return { path: transcriptPath, slug, ...scoreTranscript(raw) };
         }
         catch (error) {
-            return {
-                path: transcriptPath,
-                slug,
-                score: 0,
-                unreadable: true,
-                error: error instanceof Error ? error.message : String(error),
-            };
+            return unreadableRow(transcriptPath, slug, error);
         }
         finally {
-            fs.closeSync(descriptor);
+            if (descriptor !== undefined) {
+                fs.closeSync(descriptor);
+            }
         }
     });
     const selectedRows = selectForDeepRead(rows, cap);

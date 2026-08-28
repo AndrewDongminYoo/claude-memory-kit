@@ -9,6 +9,7 @@ import {
   SCORE_MIN,
 } from "./lib/score.ts";
 import {
+  assertDirectTranscriptPath,
   assertSlugInScope,
   openSafeTranscriptFile,
   parseScopeSlugPrefixes,
@@ -34,12 +35,34 @@ interface Row {
   [key: string]: unknown;
 }
 
+function isRecoverableTranscriptReadError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EACCES" || code === "ENOENT" || code === "EPERM";
+}
+
+function unreadableRow(
+  transcriptPath: string,
+  slug: string,
+  error: unknown,
+): Row {
+  return {
+    path: transcriptPath,
+    slug,
+    score: 0,
+    unreadable: true,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function main(): void {
   const scopePrefixes = parseScopeSlugPrefixes();
   const configuredProjectsDir = projectsDir(resolveClaudeRoot());
   const transcriptPaths = [
     ...new Set(
-      process.argv.slice(2).filter((argument) => !argument.startsWith("--")),
+      process.argv
+        .slice(2)
+        .filter((argument) => !argument.startsWith("--"))
+        .map((argument) => path.resolve(argument)),
     ),
   ];
   if (transcriptPaths.length === 0) {
@@ -50,15 +73,24 @@ function main(): void {
   const scopedPaths = transcriptPaths.map((transcriptPath) => {
     const slug = path.basename(path.dirname(transcriptPath));
     assertSlugInScope(slug, scopePrefixes);
+    assertDirectTranscriptPath(transcriptPath, slug, configuredProjectsDir);
     return { transcriptPath, slug };
   });
 
   const rows: Row[] = scopedPaths.map(({ transcriptPath, slug }) => {
-    const descriptor = openSafeTranscriptFile(
-      transcriptPath,
-      slug,
-      configuredProjectsDir,
-    );
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSafeTranscriptFile(
+        transcriptPath,
+        slug,
+        configuredProjectsDir,
+      );
+    } catch (error) {
+      if (isRecoverableTranscriptReadError(error)) {
+        return unreadableRow(transcriptPath, slug, error);
+      }
+      throw error;
+    }
     try {
       const raw = fs.readFileSync(descriptor, "utf8");
       if (isUnreadableTranscript(raw)) {
@@ -72,15 +104,11 @@ function main(): void {
       }
       return { path: transcriptPath, slug, ...scoreTranscript(raw) };
     } catch (error) {
-      return {
-        path: transcriptPath,
-        slug,
-        score: 0,
-        unreadable: true,
-        error: error instanceof Error ? error.message : String(error),
-      };
+      return unreadableRow(transcriptPath, slug, error);
     } finally {
-      fs.closeSync(descriptor);
+      if (descriptor !== undefined) {
+        fs.closeSync(descriptor);
+      }
     }
   });
 

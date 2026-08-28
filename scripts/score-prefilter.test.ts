@@ -80,6 +80,28 @@ test("reports malformed JSONL as unreadable and never selects it", () => {
   assert.equal(row.selected, false);
 });
 
+test("reports a removed in-scope transcript as unreadable and scores the batch", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
+  const transcript = path.join(
+    root,
+    "projects",
+    "cmk-score-cli-project",
+    "removed.jsonl",
+  );
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+
+  const result = runScorePrefilter([transcript], {
+    ...process.env,
+    CLAUDE_CONFIG_DIR: root,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const row = JSON.parse(result.stdout) as Record<string, unknown>;
+  assert.equal(row.unreadable, true);
+  assert.equal(row.selected, false);
+  assert.match(String(row.error), /ENOENT/);
+});
+
 test("rejects a fractional MAX_PER_PROJECT before reading transcripts", () => {
   const configRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), "cmk-score-config-"),
@@ -123,7 +145,7 @@ test(
   },
 );
 
-test("deduplicates repeated transcript arguments before selection", () => {
+test("deduplicates normalized transcript aliases before selection", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
   const transcript = path.join(
     root,
@@ -156,7 +178,12 @@ test("deduplicates repeated transcript arguments before selection", () => {
       .join("\n") + "\n",
   );
 
-  const result = runScorePrefilter([transcript, transcript], {
+  const alias = `${path.dirname(transcript)}/../${path.basename(
+    path.dirname(transcript),
+  )}/${path.basename(transcript)}`;
+  assert.notEqual(alias, transcript);
+
+  const result = runScorePrefilter([transcript, alias], {
     ...process.env,
     CLAUDE_CONFIG_DIR: root,
     MAX_PER_PROJECT: "1",
