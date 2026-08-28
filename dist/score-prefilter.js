@@ -1,0 +1,81 @@
+import fs from "node:fs";
+import path from "node:path";
+import { projectsDir, resolveClaudeRoot } from "./lib/paths.js";
+import { isUnreadableTranscript, parseMaxPerProject, scoreTranscript, selectForDeepRead, SCORE_MIN, } from "./lib/score.js";
+import { assertSlugInScope, openSafeTranscriptFile, parseScopeSlugPrefixes, } from "./lib/scope.js";
+function main() {
+    const scopePrefixes = parseScopeSlugPrefixes();
+    const configuredProjectsDir = projectsDir(resolveClaudeRoot());
+    const transcriptPaths = [
+        ...new Set(process.argv.slice(2).filter((argument) => !argument.startsWith("--"))),
+    ];
+    if (transcriptPaths.length === 0) {
+        process.stderr.write("usage: score-prefilter <transcript.jsonl> ...\n");
+        process.exit(2);
+    }
+    const cap = parseMaxPerProject(process.env.MAX_PER_PROJECT);
+    const scopedPaths = [];
+    try {
+        for (const transcriptPath of transcriptPaths) {
+            const slug = path.basename(path.dirname(transcriptPath));
+            assertSlugInScope(slug, scopePrefixes);
+            scopedPaths.push({
+                transcriptPath,
+                slug,
+                descriptor: openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir),
+            });
+        }
+    }
+    catch (error) {
+        for (const { descriptor } of scopedPaths)
+            fs.closeSync(descriptor);
+        throw error;
+    }
+    const rows = scopedPaths.map(({ transcriptPath, slug, descriptor }) => {
+        try {
+            const raw = fs.readFileSync(descriptor, "utf8");
+            if (isUnreadableTranscript(raw)) {
+                return {
+                    path: transcriptPath,
+                    slug,
+                    score: 0,
+                    unreadable: true,
+                    error: "no valid JSONL transcript entries",
+                };
+            }
+            return { path: transcriptPath, slug, ...scoreTranscript(raw) };
+        }
+        catch (error) {
+            return {
+                path: transcriptPath,
+                slug,
+                score: 0,
+                unreadable: true,
+                error: error instanceof Error ? error.message : String(error),
+            };
+        }
+        finally {
+            fs.closeSync(descriptor);
+        }
+    });
+    const selectedRows = selectForDeepRead(rows, cap);
+    const selected = new Set(selectedRows.map((row) => row.path));
+    for (const row of rows) {
+        process.stdout.write(JSON.stringify({
+            ...row,
+            above: !row.unreadable && row.score >= SCORE_MIN,
+            selected: selected.has(row.path),
+        }) + "\n");
+    }
+    // Without a summary the caller has to re-aggregate 500 JSON lines to learn
+    // what the batch costs. Stubs get their own count because they dominate a
+    // real corpus (375 of 583 on the 2026-08-05 run) and explain a low yield
+    // that would otherwise read as a broken filter.
+    const above = rows.filter((r) => !r.unreadable && r.score >= SCORE_MIN).length;
+    const stubs = rows.filter((r) => r.turns !== undefined && r.turns < 3).length;
+    const projects = new Set(selectedRows.map((row) => row.slug)).size;
+    process.stderr.write(`${rows.length} scored | ${above} above SCORE_MIN=${SCORE_MIN} | ` +
+        `${selected.size} selected across ${projects} project(s) ` +
+        `(MAX_PER_PROJECT=${cap}) | ${stubs} stub(s) (<3 turns)\n`);
+}
+main();

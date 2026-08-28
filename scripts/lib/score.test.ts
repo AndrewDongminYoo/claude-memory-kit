@@ -5,6 +5,8 @@ import {
   scoreTranscript,
   scoreEntries,
   selectForDeepRead,
+  isUnreadableTranscript,
+  parseMaxPerProject,
   SCORE_MIN,
   type TranscriptEntry,
 } from "./score.ts";
@@ -37,6 +39,12 @@ test("parseTranscript reads string and array content, counts tool_use, skips bad
   assert.equal(entries[0]?.text, "hello");
   assert.equal(entries[1]?.toolUses, 1);
   assert.match(entries[1]?.text ?? "", /hi/);
+});
+
+test("detects a transcript with no valid JSONL entries as unreadable", () => {
+  assert.equal(isUnreadableTranscript("{ invalid\n"), true);
+  assert.equal(isUnreadableTranscript("\n"), false, "empty is low-score data");
+  assert.equal(isUnreadableTranscript('{"type":"user"}\n'), false);
 });
 
 // A clearly memory-worthy session: operator corrections, a post-mortem, a commit, honesty marker.
@@ -162,11 +170,15 @@ test("a self-curated session (wrote to memory/) is dampened below an equivalent 
 
 test("selectForDeepRead drops below-threshold rows and caps each project", () => {
   const rows = [
-    { path: "/p/alpha/1.jsonl", score: 90 },
-    { path: "/p/alpha/2.jsonl", score: 80 },
-    { path: "/p/alpha/3.jsonl", score: 70 },
-    { path: "/p/beta/1.jsonl", score: 60 },
-    { path: "/p/beta/2.jsonl", score: SCORE_MIN - 1 },
+    { path: "/p/alpha/1.jsonl", slug: "alpha", score: 90 },
+    { path: "/p/alpha/2.jsonl", slug: "alpha", score: 80 },
+    { path: "/p/alpha/3.jsonl", slug: "alpha", score: 70 },
+    { path: "/p/beta/1.jsonl", slug: "beta", score: 60 },
+    {
+      path: "/p/beta/2.jsonl",
+      slug: "beta",
+      score: SCORE_MIN - 1,
+    },
   ];
   assert.deepEqual(
     selectForDeepRead(rows, 2).map((r) => r.path),
@@ -178,6 +190,38 @@ test("selectForDeepRead drops below-threshold rows and caps each project", () =>
     4,
     "cap 0 disables the cap but keeps the threshold",
   );
+});
+
+test("caps Windows-style rows per explicit slug", () => {
+  const rows = [
+    { path: "C:\\projects\\alpha\\one.jsonl", slug: "alpha", score: 90 },
+    { path: "C:\\projects\\alpha\\two.jsonl", slug: "alpha", score: 80 },
+    { path: "C:\\projects\\beta\\one.jsonl", slug: "beta", score: 70 },
+  ];
+
+  assert.deepEqual(
+    selectForDeepRead(rows, 1).map((row) => row.slug),
+    ["alpha", "beta"],
+  );
+});
+
+test("keeps one highest-scoring row for duplicate input paths", () => {
+  const rows = [
+    { path: "/p/alpha/one.jsonl", slug: "alpha", score: 70 },
+    { path: "/p/alpha/one.jsonl", slug: "alpha", score: 90 },
+    { path: "/p/beta/one.jsonl", slug: "beta", score: 80 },
+  ];
+
+  assert.deepEqual(
+    selectForDeepRead(rows).map((row) => row.score),
+    [90, 80],
+  );
+});
+
+test("rejects a fractional or negative MAX_PER_PROJECT", () => {
+  assert.throws(() => parseMaxPerProject("1.5"), /invalid MAX_PER_PROJECT/);
+  assert.throws(() => parseMaxPerProject("-1"), /invalid MAX_PER_PROJECT/);
+  assert.equal(parseMaxPerProject("0"), 0);
 });
 
 test("error-heavy session with no resolution is penalized", () => {

@@ -45,3 +45,9 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Build distribution
+        run: pnpm build
+
+      - name: Verify plugin distribution
+        run: pnpm verify:plugin

@@ -1,10 +1,18 @@
 import fs from "node:fs";
+import path from "node:path";
+import { projectsDir, resolveClaudeRoot } from "./lib/paths.ts";
 import {
+  isUnreadableTranscript,
+  parseMaxPerProject,
   scoreTranscript,
   selectForDeepRead,
-  MAX_PER_PROJECT,
   SCORE_MIN,
 } from "./lib/score.ts";
+import {
+  assertSlugInScope,
+  openSafeTranscriptFile,
+  parseScopeSlugPrefixes,
+} from "./lib/scope.ts";
 
 /**
  * CLI: score one or more transcript files (paths as args) with the cheap,
@@ -18,43 +26,86 @@ import {
  */
 interface Row {
   path: string;
+  slug: string;
   score: number;
   turns?: number;
+  unreadable?: boolean;
   error?: string;
   [key: string]: unknown;
 }
 
 function main(): void {
-  const paths = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-  if (paths.length === 0) {
+  const scopePrefixes = parseScopeSlugPrefixes();
+  const configuredProjectsDir = projectsDir(resolveClaudeRoot());
+  const transcriptPaths = [
+    ...new Set(
+      process.argv.slice(2).filter((argument) => !argument.startsWith("--")),
+    ),
+  ];
+  if (transcriptPaths.length === 0) {
     process.stderr.write("usage: score-prefilter <transcript.jsonl> ...\n");
     process.exit(2);
   }
-  const cap = Number(process.env.MAX_PER_PROJECT ?? MAX_PER_PROJECT);
-  if (!Number.isFinite(cap)) {
-    throw new Error(`invalid MAX_PER_PROJECT: ${process.env.MAX_PER_PROJECT}`);
+  const cap = parseMaxPerProject(process.env.MAX_PER_PROJECT);
+  const scopedPaths: Array<{
+    transcriptPath: string;
+    slug: string;
+    descriptor: number;
+  }> = [];
+  try {
+    for (const transcriptPath of transcriptPaths) {
+      const slug = path.basename(path.dirname(transcriptPath));
+      assertSlugInScope(slug, scopePrefixes);
+      scopedPaths.push({
+        transcriptPath,
+        slug,
+        descriptor: openSafeTranscriptFile(
+          transcriptPath,
+          slug,
+          configuredProjectsDir,
+        ),
+      });
+    }
+  } catch (error) {
+    for (const { descriptor } of scopedPaths) fs.closeSync(descriptor);
+    throw error;
   }
 
-  const rows: Row[] = paths.map((path) => {
-    try {
-      return { path, ...scoreTranscript(fs.readFileSync(path, "utf8")) };
-    } catch (err) {
-      // An unreadable transcript scores 0 and is reported, never fatal — one
-      // bad file must not sink a 500-file batch.
-      return {
-        path,
-        score: 0,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-  });
+  const rows: Row[] = scopedPaths.map(
+    ({ transcriptPath, slug, descriptor }) => {
+      try {
+        const raw = fs.readFileSync(descriptor, "utf8");
+        if (isUnreadableTranscript(raw)) {
+          return {
+            path: transcriptPath,
+            slug,
+            score: 0,
+            unreadable: true,
+            error: "no valid JSONL transcript entries",
+          };
+        }
+        return { path: transcriptPath, slug, ...scoreTranscript(raw) };
+      } catch (error) {
+        return {
+          path: transcriptPath,
+          slug,
+          score: 0,
+          unreadable: true,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    },
+  );
 
-  const selected = new Set(selectForDeepRead(rows, cap).map((r) => r.path));
+  const selectedRows = selectForDeepRead(rows, cap);
+  const selected = new Set(selectedRows.map((row) => row.path));
   for (const row of rows) {
     process.stdout.write(
       JSON.stringify({
         ...row,
-        above: row.score >= SCORE_MIN,
+        above: !row.unreadable && row.score >= SCORE_MIN,
         selected: selected.has(row.path),
       }) + "\n",
     );
@@ -64,9 +115,11 @@ function main(): void {
   // what the batch costs. Stubs get their own count because they dominate a
   // real corpus (375 of 583 on the 2026-08-05 run) and explain a low yield
   // that would otherwise read as a broken filter.
-  const above = rows.filter((r) => r.score >= SCORE_MIN).length;
+  const above = rows.filter(
+    (r) => !r.unreadable && r.score >= SCORE_MIN,
+  ).length;
   const stubs = rows.filter((r) => r.turns !== undefined && r.turns < 3).length;
-  const projects = new Set([...selected].map((p) => p.split("/").at(-2))).size;
+  const projects = new Set(selectedRows.map((row) => row.slug)).size;
   process.stderr.write(
     `${rows.length} scored | ${above} above SCORE_MIN=${SCORE_MIN} | ` +
       `${selected.size} selected across ${projects} project(s) ` +

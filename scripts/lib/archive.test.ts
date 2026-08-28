@@ -20,6 +20,7 @@ test("moves the transcript into archive/<slug>, preserving content, removing sou
   const dest = archiveTranscript({
     transcriptPath: src,
     slug: "proj",
+    projectsDir: path.join(root, "projects"),
     archiveDir,
   });
 
@@ -40,6 +41,7 @@ test("collision gets a numeric suffix, never overwrites", () => {
   const dest = archiveTranscript({
     transcriptPath: src,
     slug: "proj",
+    projectsDir: path.join(root, "projects"),
     archiveDir,
   });
   assert.equal(dest, path.join(archiveDir, "proj", "session.dup1.jsonl"));
@@ -48,4 +50,197 @@ test("collision gets a numeric suffix, never overwrites", () => {
     "EXISTING\n",
   );
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
+});
+
+test("reports a complete destination before removing the source", () => {
+  const { root, src } = setup();
+  let callbackRan = false;
+
+  archiveTranscript({
+    transcriptPath: src,
+    slug: "proj",
+    projectsDir: path.join(root, "projects"),
+    archiveDir: path.join(root, ".transcript-archive"),
+    onDestinationReady: (destination) => {
+      callbackRan = true;
+      assert.equal(fs.existsSync(destination), true);
+      assert.equal(fs.existsSync(src), true);
+    },
+  });
+
+  assert.equal(callbackRan, true);
+  assert.equal(fs.existsSync(src), false);
+});
+
+test("keeps the source when final archive sync fails", () => {
+  const { root, src } = setup();
+  const originalFsync = fs.fsyncSync;
+  let calls = 0;
+  fs.fsyncSync = ((descriptor: number) => {
+    calls += 1;
+    if (calls === 2) {
+      throw new Error("final archive sync failed");
+    }
+    originalFsync(descriptor);
+  }) as typeof fs.fsyncSync;
+
+  try {
+    assert.throws(
+      () =>
+        archiveTranscript({
+          transcriptPath: src,
+          slug: "proj",
+          projectsDir: path.join(root, "projects"),
+          archiveDir: path.join(root, ".transcript-archive"),
+        }),
+      /final archive sync failed/,
+    );
+  } finally {
+    fs.fsyncSync = originalFsync;
+  }
+
+  assert.equal(fs.existsSync(src), true, "source must remain in place");
+});
+
+test("does not remove a source path replaced during archiving", () => {
+  const { root, src } = setup();
+  const replacement = `${src}.original`;
+  const outside = path.join(root, "outside.jsonl");
+  fs.writeFileSync(outside, "OUTSIDE\n");
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: path.join(root, ".transcript-archive"),
+        onDestinationReady: () => {
+          fs.renameSync(src, replacement);
+          fs.symlinkSync(outside, src);
+        },
+      }),
+    /symbolic link|source changed during archiving/,
+  );
+  assert.equal(fs.readFileSync(outside, "utf8"), "OUTSIDE\n");
+  assert.equal(fs.readFileSync(replacement, "utf8"), "PAYLOAD\n");
+  assert.equal(fs.lstatSync(src).isSymbolicLink(), true);
+});
+
+test("rejects a slug that is not one path segment", () => {
+  const { root, src } = setup();
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "../outside",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: path.join(root, ".transcript-archive"),
+      }),
+    /slug must be a single path segment/,
+  );
+  assert.equal(fs.existsSync(src), true, "invalid slug must keep the source");
+});
+
+test("rejects a source outside the configured projects directory", () => {
+  const { root } = setup();
+  const outsideFile = path.join(root, "outside.jsonl");
+  fs.writeFileSync(outsideFile, "OUTSIDE\n");
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: outsideFile,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: path.join(root, ".transcript-archive"),
+      }),
+    /direct child of the configured project slug directory/,
+  );
+  assert.equal(
+    fs.existsSync(outsideFile),
+    true,
+    "outside source must remain in place",
+  );
+});
+
+test("rejects a symlinked transcript source", () => {
+  const { root } = setup();
+  const projectDir = path.join(root, "projects", "proj");
+  const target = path.join(projectDir, "target.jsonl");
+  const sourceLink = path.join(projectDir, "linked.jsonl");
+  fs.writeFileSync(target, "TARGET\n");
+  fs.symlinkSync(target, sourceLink);
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: sourceLink,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: path.join(root, ".transcript-archive"),
+      }),
+    /symbolic link/,
+  );
+  assert.equal(fs.existsSync(sourceLink), true, "symlink must remain in place");
+});
+
+test("rejects a symlinked archive slug directory", () => {
+  const { root, src } = setup();
+  const archiveRoot = path.join(root, ".transcript-archive");
+  const outsideDir = path.join(root, "outside");
+  fs.mkdirSync(archiveRoot, { recursive: true });
+  fs.mkdirSync(outsideDir, { recursive: true });
+  fs.symlinkSync(outsideDir, path.join(archiveRoot, "proj"));
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: archiveRoot,
+      }),
+    /symbolic link/,
+  );
+  assert.equal(fs.existsSync(src), true, "source must remain in place");
+});
+
+test("rejects a group-writable archive directory", () => {
+  const { root, src } = setup();
+  const archiveRoot = path.join(root, ".transcript-archive");
+  fs.mkdirSync(archiveRoot);
+  fs.chmodSync(archiveRoot, 0o777);
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: archiveRoot,
+      }),
+    /must not be writable by group or others/,
+  );
+  assert.equal(fs.existsSync(src), true, "source must remain in place");
+});
+
+test("rejects an archive directory below a group-writable parent", () => {
+  const { root, src } = setup();
+  const parent = path.join(root, "shared");
+  fs.mkdirSync(parent);
+  fs.chmodSync(parent, 0o777);
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: path.join(parent, ".transcript-archive"),
+      }),
+    /archive directory parent must not be writable by group or others/,
+  );
+  assert.equal(fs.existsSync(src), true, "source must remain in place");
 });

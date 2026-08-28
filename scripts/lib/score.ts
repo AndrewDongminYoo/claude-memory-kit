@@ -95,6 +95,11 @@ export function parseTranscript(raw: string): TranscriptEntry[] {
   return entries;
 }
 
+/** Returns true when nonblank input contains no valid transcript entry. */
+export function isUnreadableTranscript(raw: string): boolean {
+  return raw.trim().length > 0 && parseTranscript(raw).length === 0;
+}
+
 // --- Signal patterns -------------------------------------------------------
 
 /** Operator corrections/directives — the strongest memory-worthy signal. */
@@ -217,9 +222,17 @@ export function scoreTranscript(raw: string): ScoreResult {
 /** Default cap on how many transcripts of one project earn a deep read. */
 export const MAX_PER_PROJECT = 5;
 
+export function parseMaxPerProject(value: string | undefined): number {
+  const cap = Number(value ?? MAX_PER_PROJECT);
+  if (!Number.isInteger(cap) || cap < 0) {
+    throw new Error(`invalid MAX_PER_PROJECT: ${value}`);
+  }
+  return cap;
+}
+
 export interface Selectable {
-  /** `<projectsDir>/<slug>/<session>.jsonl` — the slug is the grouping key. */
   path: string;
+  slug: string;
   score: number;
 }
 
@@ -241,14 +254,23 @@ export function selectForDeepRead<T extends Selectable>(
   rows: T[],
   cap: number = MAX_PER_PROJECT,
 ): T[] {
+  const uniqueRows = new Map<string, T>();
+  for (const row of rows) {
+    const existing = uniqueRows.get(row.path);
+    if (!existing || row.score > existing.score) {
+      uniqueRows.set(row.path, row);
+    }
+  }
+
   const seen = new Map<string, number>();
   const out: T[] = [];
-  for (const row of [...rows].sort((a, b) => b.score - a.score)) {
+  for (const row of [...uniqueRows.values()].sort(
+    (a, b) => b.score - a.score,
+  )) {
     if (row.score < SCORE_MIN) continue;
-    const slug = row.path.split("/").at(-2) ?? "";
-    const taken = seen.get(slug) ?? 0;
+    const taken = seen.get(row.slug) ?? 0;
     if (cap > 0 && taken >= cap) continue;
-    seen.set(slug, taken + 1);
+    seen.set(row.slug, taken + 1);
     out.push(row);
   }
   return out;
