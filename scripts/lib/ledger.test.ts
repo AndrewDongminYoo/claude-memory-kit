@@ -27,6 +27,34 @@ const rec = (over: Partial<LedgerRecord>): LedgerRecord => ({
   ...over,
 });
 
+function withWindowsDirectoryFsyncUnavailable(action: () => void): void {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(
+    process,
+    "platform",
+  );
+  assert.ok(platformDescriptor);
+  const originalOpen = fs.openSync;
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "win32",
+  });
+  fs.openSync = ((pathname, flags, mode) => {
+    if (typeof flags === "number" && (flags & fs.constants.O_DIRECTORY) !== 0) {
+      const error = new Error("directory fsync is unavailable on Windows");
+      (error as NodeJS.ErrnoException).code = "EPERM";
+      throw error;
+    }
+    return originalOpen(pathname, flags, mode);
+  }) as typeof fs.openSync;
+
+  try {
+    action();
+  } finally {
+    fs.openSync = originalOpen;
+    Object.defineProperty(process, "platform", platformDescriptor);
+  }
+}
+
 test("missing ledger reads as empty", () => {
   assert.deepEqual(readLedger(path.join(tmpDir(), "nope.jsonl")), []);
   assert.deepEqual([...minedSessions(path.join(tmpDir(), "nope.jsonl"))], []);
@@ -63,6 +91,19 @@ test("syncs new ledger directories and the new ledger file before returning", ()
   assert.equal(calls, 3);
 });
 
+test("appends on Windows when directory fsync is unavailable", () => {
+  const f = path.join(tmpDir(), "new-ledger", "l.jsonl");
+
+  withWindowsDirectoryFsyncUnavailable(() => {
+    appendLedger(f, rec({ session_id: "windows" }));
+  });
+
+  assert.deepEqual(
+    readLedger(f).map((record) => record.session_id),
+    ["windows"],
+  );
+});
+
 test("blank lines in the ledger are ignored", () => {
   const f = path.join(tmpDir(), "l.jsonl");
   appendLedger(f, rec({ session_id: "a" }));
@@ -80,6 +121,31 @@ test("ignores only a truncated trailing ledger event", () => {
     ["complete"],
   );
   assert.deepEqual([...minedSessions(f)], ["complete"]);
+});
+
+test("truncates a torn trailing ledger event before appending", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  appendLedger(f, rec({ session_id: "complete" }));
+  fs.appendFileSync(f, '{"session_id":"torn"');
+
+  appendLedger(f, rec({ session_id: "after-recovery" }));
+
+  assert.deepEqual(
+    readLedger(f).map((record) => record.session_id),
+    ["complete", "after-recovery"],
+  );
+});
+
+test("separates a complete trailing event without a newline before appending", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  fs.writeFileSync(f, JSON.stringify(rec({ session_id: "complete" })));
+
+  appendLedger(f, rec({ session_id: "after-recovery" }));
+
+  assert.deepEqual(
+    readLedger(f).map((record) => record.session_id),
+    ["complete", "after-recovery"],
+  );
 });
 
 test("rejects a malformed final ledger event that ends with a newline", () => {

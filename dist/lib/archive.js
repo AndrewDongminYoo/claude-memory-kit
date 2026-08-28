@@ -107,6 +107,9 @@ function syncFile(pathname) {
     }
 }
 function syncDirectory(pathname) {
+    if (process.platform === "win32") {
+        return;
+    }
     const descriptor = fs.openSync(pathname, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
     try {
         fs.fsyncSync(descriptor);

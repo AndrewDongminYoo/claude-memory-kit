@@ -14,6 +14,34 @@ function setup(): { root: string; src: string } {
   return { root, src };
 }
 
+function withWindowsDirectoryFsyncUnavailable(action: () => void): void {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(
+    process,
+    "platform",
+  );
+  assert.ok(platformDescriptor);
+  const originalOpen = fs.openSync;
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "win32",
+  });
+  fs.openSync = ((pathname, flags, mode) => {
+    if (typeof flags === "number" && (flags & fs.constants.O_DIRECTORY) !== 0) {
+      const error = new Error("directory fsync is unavailable on Windows");
+      (error as NodeJS.ErrnoException).code = "EPERM";
+      throw error;
+    }
+    return originalOpen(pathname, flags, mode);
+  }) as typeof fs.openSync;
+
+  try {
+    action();
+  } finally {
+    fs.openSync = originalOpen;
+    Object.defineProperty(process, "platform", platformDescriptor);
+  }
+}
+
 test("moves the transcript into archive/<slug>, preserving content, removing source", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
@@ -27,6 +55,24 @@ test("moves the transcript into archive/<slug>, preserving content, removing sou
   assert.equal(fs.existsSync(src), false, "source should be gone (moved)");
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n", "content preserved");
   assert.equal(dest, path.join(archiveDir, "proj", "session.jsonl"));
+});
+
+test("archives on Windows when directory fsync is unavailable", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  let dest = "";
+
+  withWindowsDirectoryFsyncUnavailable(() => {
+    dest = archiveTranscript({
+      transcriptPath: src,
+      slug: "proj",
+      projectsDir: path.join(root, "projects"),
+      archiveDir,
+    });
+  });
+
+  assert.equal(fs.existsSync(src), false, "source should be archived");
+  assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
 });
 
 test("collision gets a numeric suffix, never overwrites", () => {

@@ -64,6 +64,9 @@ export function minedSessions(file: string): Set<string> {
 }
 
 function syncDirectory(pathname: string): void {
+  if (process.platform === "win32") {
+    return;
+  }
   const descriptor = fs.openSync(
     pathname,
     fs.constants.O_RDONLY | fs.constants.O_DIRECTORY,
@@ -72,6 +75,26 @@ function syncDirectory(pathname: string): void {
     fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
+  }
+}
+
+function repairUnterminatedTrailingEvent(file: string): void {
+  if (!fs.existsSync(file)) {
+    return;
+  }
+  const contents = fs.readFileSync(file, "utf8");
+  if (contents.endsWith("\n")) {
+    return;
+  }
+  const lineStart = contents.lastIndexOf("\n") + 1;
+  const trailingEvent = contents.slice(lineStart);
+  try {
+    if (trailingEvent.trim().length > 0) {
+      JSON.parse(trailingEvent);
+    }
+    fs.appendFileSync(file, "\n");
+  } catch {
+    fs.truncateSync(file, lineStart);
   }
 }
 
@@ -106,6 +129,7 @@ export function appendLedger(file: string, rec: LedgerRecord): void {
   if (created) {
     syncCreatedDirectoryEntries(created, ledgerDirectory);
   }
+  repairUnterminatedTrailingEvent(file);
   const descriptor = fs.openSync(file, "a", 0o600);
   try {
     fs.writeFileSync(descriptor, JSON.stringify(rec) + "\n");
