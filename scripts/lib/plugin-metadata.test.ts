@@ -45,7 +45,6 @@ test("plugin metadata declares only the implemented skill", () => {
 
 test("built entry points parse with Node.js", () => {
   for (const entryPoint of [
-    "archive-transcript.js",
     "finalize-transcript.js",
     "recover-pending-archives.js",
     "scan-cold.js",
@@ -62,6 +61,15 @@ test("built entry points parse with Node.js", () => {
       },
     );
     assert.equal(result.status, 0, result.stderr);
+  }
+});
+
+test("does not publish an archive-only entry point that bypasses finalization", () => {
+  for (const pathFromRoot of [
+    "scripts/archive-transcript.ts",
+    "dist/archive-transcript.js",
+  ]) {
+    assert.equal(fs.existsSync(path.join(repoRoot, pathFromRoot)), false);
   }
 });
 

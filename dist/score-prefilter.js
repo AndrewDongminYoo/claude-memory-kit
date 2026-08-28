@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fingerprintContents } from "./lib/fingerprint.js";
 import { projectsDir, resolveClaudeRoot } from "./lib/paths.js";
 import { isUnreadableTranscript, parseMaxPerProject, scoreTranscript, selectForDeepRead, SCORE_MIN, } from "./lib/score.js";
-import { assertDirectTranscriptPath, assertSlugInScope, openSafeTranscriptFile, parseScopeSlugPrefixes, } from "./lib/scope.js";
+import { assertDirectTranscriptPath, assertSlugInScope, isTranscriptPathValidationError, openSafeTranscriptFile, parseScopeSlugPrefixes, } from "./lib/scope.js";
 function transcriptReadErrorCode(error) {
     return error?.code;
 }
@@ -54,6 +55,12 @@ function main() {
             descriptor = openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir);
         }
         catch (error) {
+            if (isTranscriptPathValidationError(error)) {
+                if (transcriptReadErrorCode(error) === "ENOENT") {
+                    return missingRow(transcriptPath, slug, error);
+                }
+                throw error;
+            }
             if (transcriptReadErrorCode(error) === "ENOENT") {
                 return missingRow(transcriptPath, slug, error);
             }
@@ -63,7 +70,8 @@ function main() {
             throw error;
         }
         try {
-            const raw = fs.readFileSync(descriptor, "utf8");
+            const contents = fs.readFileSync(descriptor);
+            const raw = contents.toString("utf8");
             if (isUnreadableTranscript(raw)) {
                 return {
                     path: transcriptPath,
@@ -73,10 +81,21 @@ function main() {
                     error: "no valid JSONL transcript entries",
                 };
             }
-            return { path: transcriptPath, slug, ...scoreTranscript(raw) };
+            return {
+                path: transcriptPath,
+                slug,
+                fingerprint: fingerprintContents(contents),
+                ...scoreTranscript(raw),
+            };
         }
         catch (error) {
-            return unreadableRow(transcriptPath, slug, error);
+            if (transcriptReadErrorCode(error) === "ENOENT") {
+                return missingRow(transcriptPath, slug, error);
+            }
+            if (isUnreadableTranscriptReadError(error)) {
+                return unreadableRow(transcriptPath, slug, error);
+            }
+            throw error;
         }
         finally {
             if (descriptor !== undefined) {

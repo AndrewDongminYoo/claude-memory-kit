@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isTranscriptFingerprint } from "./fingerprint.ts";
 
 /** Outcome of processing one transcript. */
 export type Outcome =
@@ -19,6 +20,7 @@ export interface LedgerRecord {
   archive_state?: ArchiveState;
   transcript_path?: string;
   archive_path?: string;
+  source_fingerprint?: string;
 }
 
 export interface PendingArchiveRecord extends LedgerRecord {
@@ -141,7 +143,11 @@ export function appendLedger(file: string, rec: LedgerRecord): void {
 }
 
 export function appendPendingArchive(file: string, rec: LedgerRecord): void {
-  if (rec.outcome === "unreadable" || !rec.transcript_path) {
+  if (
+    rec.outcome === "unreadable" ||
+    !rec.transcript_path ||
+    !isTranscriptFingerprint(rec.source_fingerprint)
+  ) {
     throw new Error("pending archive record requires an archivable source");
   }
   appendLedger(file, { ...rec, archive_state: "pending" });
@@ -151,7 +157,8 @@ export function appendCompletedArchive(file: string, rec: LedgerRecord): void {
   if (
     rec.outcome === "unreadable" ||
     !rec.transcript_path ||
-    !rec.archive_path
+    !rec.archive_path ||
+    !isTranscriptFingerprint(rec.source_fingerprint)
   ) {
     throw new Error(
       "completed archive record requires source and archive paths",

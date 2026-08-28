@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,6 +88,33 @@ test("reports malformed JSONL as unreadable and never selects it", () => {
   assert.equal(row.selected, false);
 });
 
+test("prints a content fingerprint for a finalizable transcript", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
+  const transcript = path.join(
+    root,
+    "projects",
+    "cmk-score-cli-project",
+    "valid.jsonl",
+  );
+  const contents =
+    JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }) +
+    "\n";
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, contents);
+
+  const result = runScorePrefilter([transcript], {
+    ...process.env,
+    CLAUDE_CONFIG_DIR: root,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const row = JSON.parse(result.stdout) as Record<string, unknown>;
+  assert.equal(
+    row.fingerprint,
+    createHash("sha256").update(contents).digest("hex"),
+  );
+});
+
 test("reports a removed in-scope transcript as missing and scores the batch", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
   const transcript = path.join(
@@ -155,6 +183,120 @@ test("reports access-denied transcripts as unreadable instead of missing", () =>
     assert.equal(row.missing, undefined);
     assert.equal(row.selected, false);
     assert.match(String(row.error), new RegExp(code));
+  }
+});
+
+test("classifies descriptor-read failures without hiding unexpected errors", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
+  const transcript = path.join(
+    root,
+    "projects",
+    "cmk-score-cli-project",
+    "read-error.jsonl",
+  );
+  const preloadPath = path.join(root, "mock-read.mjs");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, "PAYLOAD\n");
+  fs.writeFileSync(
+    preloadPath,
+    [
+      'import fs from "node:fs";',
+      "const originalReadFileSync = fs.readFileSync;",
+      "fs.readFileSync = (pathname, options) => {",
+      '  if (typeof pathname === "number" && process.env.CMK_TEST_READ_ERROR) {',
+      "    const error = new Error(`mock ${process.env.CMK_TEST_READ_ERROR}`);",
+      "    error.code = process.env.CMK_TEST_READ_ERROR;",
+      "    throw error;",
+      "  }",
+      "  return originalReadFileSync(pathname, options);",
+      "};",
+    ].join("\n"),
+  );
+
+  for (const code of ["EACCES", "EPERM"]) {
+    const result = runScorePrefilter(
+      [transcript],
+      {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: root,
+        CMK_TEST_READ_ERROR: code,
+      },
+      [preloadPath],
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const row = JSON.parse(result.stdout) as Record<string, unknown>;
+    assert.equal(row.unreadable, true);
+    assert.equal(row.missing, undefined);
+    assert.equal(row.selected, false);
+    assert.match(String(row.error), new RegExp(code));
+  }
+
+  const missing = runScorePrefilter(
+    [transcript],
+    {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: root,
+      CMK_TEST_READ_ERROR: "ENOENT",
+    },
+    [preloadPath],
+  );
+  assert.equal(missing.status, 0, missing.stderr);
+  const missingRow = JSON.parse(missing.stdout) as Record<string, unknown>;
+  assert.equal(missingRow.missing, true);
+  assert.equal(missingRow.unreadable, undefined);
+  assert.equal(missingRow.selected, false);
+
+  const unexpected = runScorePrefilter(
+    [transcript],
+    {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: root,
+      CMK_TEST_READ_ERROR: "EIO",
+    },
+    [preloadPath],
+  );
+  assert.notEqual(unexpected.status, 0);
+  assert.match(unexpected.stderr, /EIO/);
+});
+
+test("fails closed when transcript metadata cannot be validated", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
+  const projectDir = path.join(root, "projects", "cmk-score-cli-project");
+  const transcript = path.join(projectDir, "metadata-denied.jsonl");
+  const preloadPath = path.join(root, "mock-lstat.mjs");
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(transcript, "PAYLOAD\n");
+  fs.writeFileSync(
+    preloadPath,
+    [
+      'import fs from "node:fs";',
+      "const originalLstatSync = fs.lstatSync;",
+      "fs.lstatSync = (pathname, options) => {",
+      "  if (String(pathname) === process.env.CMK_TEST_LSTAT_PATH) {",
+      "    const error = new Error(`mock ${process.env.CMK_TEST_LSTAT_ERROR}`);",
+      "    error.code = process.env.CMK_TEST_LSTAT_ERROR;",
+      "    throw error;",
+      "  }",
+      "  return originalLstatSync(pathname, options);",
+      "};",
+    ].join("\n"),
+  );
+
+  for (const code of ["EACCES", "EPERM"]) {
+    const result = runScorePrefilter(
+      [transcript],
+      {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: root,
+        CMK_TEST_LSTAT_PATH: projectDir,
+        CMK_TEST_LSTAT_ERROR: code,
+      },
+      [preloadPath],
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, new RegExp(code));
   }
 });
 

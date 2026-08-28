@@ -3,7 +3,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { archiveTranscript } from "./archive.ts";
+import { fingerprintContents } from "./fingerprint.ts";
+import { archiveTranscript as archiveTranscriptUnchecked } from "./archive.ts";
+
+type ArchiveFixtureOptions = Omit<
+  Parameters<typeof archiveTranscriptUnchecked>[0],
+  "expectedFingerprint"
+> & {
+  expectedFingerprint?: string;
+};
+
+function archiveTranscript(options: ArchiveFixtureOptions): string {
+  const expectedFingerprint =
+    options.expectedFingerprint ??
+    fingerprintContents(fs.readFileSync(options.transcriptPath));
+  return archiveTranscriptUnchecked({ ...options, expectedFingerprint });
+}
 
 function setup(): { root: string; src: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-arch-"));
@@ -41,6 +56,25 @@ function withWindowsDirectoryFsyncUnavailable(action: () => void): void {
     Object.defineProperty(process, "platform", platformDescriptor);
   }
 }
+
+test("requires a reviewed fingerprint before removing a source", () => {
+  const { root, src } = setup();
+  const unsafeOptions = {
+    transcriptPath: src,
+    slug: "proj",
+    projectsDir: path.join(root, "projects"),
+    archiveDir: path.join(root, ".transcript-archive"),
+  };
+
+  assert.throws(
+    () =>
+      archiveTranscriptUnchecked(
+        unsafeOptions as Parameters<typeof archiveTranscriptUnchecked>[0],
+      ),
+    /reviewed fingerprint/,
+  );
+  assert.equal(fs.existsSync(src), true);
+});
 
 test("moves the transcript into archive/<slug>, preserving content, removing source", () => {
   const { root, src } = setup();
@@ -340,6 +374,23 @@ test("keeps the source when final archive sync fails", () => {
   }
 
   assert.equal(fs.existsSync(src), true, "source must remain in place");
+});
+
+test("keeps the source when its reviewed fingerprint does not match", () => {
+  const { root, src } = setup();
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir: path.join(root, ".transcript-archive"),
+        expectedFingerprint: "0".repeat(64),
+      }),
+    /fingerprint/,
+  );
+  assert.equal(fs.existsSync(src), true);
 });
 
 test("does not remove a source path replaced during archiving", () => {

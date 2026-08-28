@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isTranscriptFingerprint } from "./fingerprint.js";
 /** Read the append-only ledger; a missing file is an empty ledger. */
 export function readLedger(file) {
     if (!fs.existsSync(file))
@@ -96,7 +97,9 @@ export function appendLedger(file, rec) {
     syncDirectory(ledgerDirectory);
 }
 export function appendPendingArchive(file, rec) {
-    if (rec.outcome === "unreadable" || !rec.transcript_path) {
+    if (rec.outcome === "unreadable" ||
+        !rec.transcript_path ||
+        !isTranscriptFingerprint(rec.source_fingerprint)) {
         throw new Error("pending archive record requires an archivable source");
     }
     appendLedger(file, { ...rec, archive_state: "pending" });
@@ -104,7 +107,8 @@ export function appendPendingArchive(file, rec) {
 export function appendCompletedArchive(file, rec) {
     if (rec.outcome === "unreadable" ||
         !rec.transcript_path ||
-        !rec.archive_path) {
+        !rec.archive_path ||
+        !isTranscriptFingerprint(rec.source_fingerprint)) {
         throw new Error("completed archive record requires source and archive paths");
     }
     appendLedger(file, { ...rec, archive_state: "archived" });

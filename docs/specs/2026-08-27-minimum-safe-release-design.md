@@ -38,6 +38,7 @@ Recovery must leave pending records outside the allowlist unchanged and report t
 
 `scan-cold` remains read-only.
 `score-prefilter` remains read-only.
+Only `finalize-transcript` can remove an archivable source.
 
 An approved transcript moves through this state sequence:
 

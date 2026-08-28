@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { archiveTranscript } from "./archive.js";
+import { fingerprintDescriptor, isTranscriptFingerprint, } from "./fingerprint.js";
 import { appendLedger, appendCompletedArchive, appendPendingArchive, pendingArchives, } from "./ledger.js";
-import { assertDirectTranscriptPath, assertSafeTranscriptFile, assertSafeTranscriptPath, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, } from "./scope.js";
+import { assertDirectTranscriptPath, assertSafeTranscriptPath, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, openSafeTranscriptFile, } from "./scope.js";
 function processedAt(now) {
     return new Date(now ?? Date.now()).toISOString();
 }
@@ -20,7 +21,23 @@ function ledgerRecord(options, archivePath) {
         memory_written: options.memoryWritten,
         transcript_path: path.resolve(options.transcriptPath),
         archive_path: archivePath,
+        source_fingerprint: options.expectedFingerprint,
     };
+}
+function assertReviewedFingerprint(options) {
+    if (!isTranscriptFingerprint(options.expectedFingerprint)) {
+        throw new Error("archivable finalization requires a reviewed fingerprint");
+    }
+    const descriptor = openSafeTranscriptFile(options.transcriptPath, options.slug, options.projectsDir);
+    try {
+        if (fingerprintDescriptor(descriptor) !== options.expectedFingerprint) {
+            throw new Error("source fingerprint changed since review");
+        }
+        return options.expectedFingerprint;
+    }
+    finally {
+        fs.closeSync(descriptor);
+    }
 }
 /** Records unreadable input or finalizes an archivable transcript. */
 export function finalizeTranscript(options) {
@@ -31,13 +48,14 @@ export function finalizeTranscript(options) {
         appendLedger(options.ledgerFile, pending);
         return {};
     }
-    assertSafeTranscriptFile(options.transcriptPath, options.slug, options.projectsDir);
+    const expectedFingerprint = assertReviewedFingerprint(options);
     appendPendingArchive(options.ledgerFile, pending);
     const archivePath = archiveTranscript({
         transcriptPath: options.transcriptPath,
         slug: options.slug,
         projectsDir: options.projectsDir,
         archiveDir: options.archiveDir,
+        expectedFingerprint,
         onDestinationReady: (destination) => {
             appendPendingArchive(options.ledgerFile, ledgerRecord(options, destination));
         },
@@ -76,6 +94,27 @@ function isRecordedArchiveFile(archivePath, slug, archiveDir) {
         return false;
     }
 }
+function recordedArchiveMatchesFingerprint(archivePath, expectedFingerprint) {
+    try {
+        const expectedStat = fs.lstatSync(archivePath);
+        if (expectedStat.isSymbolicLink() || !expectedStat.isFile()) {
+            return false;
+        }
+        const descriptor = fs.openSync(archivePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+            const openedStat = fs.fstatSync(descriptor);
+            return (openedStat.dev === expectedStat.dev &&
+                openedStat.ino === expectedStat.ino &&
+                fingerprintDescriptor(descriptor) === expectedFingerprint);
+        }
+        finally {
+            fs.closeSync(descriptor);
+        }
+    }
+    catch {
+        return false;
+    }
+}
 function completionRecord(record, archivePath, now) {
     return {
         ...record,
@@ -98,13 +137,29 @@ export function recoverPendingArchives(options) {
         try {
             assertDirectTranscriptPath(record.transcript_path, record.slug, options.projectsDir);
             const recordedArchivePath = record.archive_path;
+            if (!isTranscriptFingerprint(record.source_fingerprint)) {
+                result.unresolved.push({
+                    sessionId: record.session_id,
+                    reason: "pending archive has no reviewed source fingerprint",
+                });
+                continue;
+            }
+            const expectedFingerprint = record.source_fingerprint;
             if (isRecordedArchiveFile(recordedArchivePath, record.slug, options.archiveDir)) {
+                if (!recordedArchiveMatchesFingerprint(recordedArchivePath, expectedFingerprint)) {
+                    result.unresolved.push({
+                        sessionId: record.session_id,
+                        reason: "recorded archive does not match the reviewed fingerprint",
+                    });
+                    continue;
+                }
                 if (fs.existsSync(record.transcript_path)) {
                     archiveTranscript({
                         transcriptPath: record.transcript_path,
                         slug: record.slug,
                         projectsDir: options.projectsDir,
                         archiveDir: options.archiveDir,
+                        expectedFingerprint,
                         existingArchivePath: recordedArchivePath,
                     });
                 }
@@ -117,6 +172,7 @@ export function recoverPendingArchives(options) {
                     slug: record.slug,
                     projectsDir: options.projectsDir,
                     archiveDir: options.archiveDir,
+                    expectedFingerprint,
                     onDestinationReady: (destination) => {
                         appendPendingArchive(options.ledgerFile, completionRecord(record, destination, options.now));
                     },

@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fingerprintContents } from "./fingerprint.ts";
 import { appendPendingArchive, readLedger } from "./ledger.ts";
 import { finalizeTranscript, recoverPendingArchives } from "./finalize.ts";
+
+const PAYLOAD_FINGERPRINT = fingerprintContents(Buffer.from("PAYLOAD\n"));
 
 function setup(): {
   root: string;
@@ -12,6 +15,7 @@ function setup(): {
   projectsDir: string;
   archiveDir: string;
   ledgerFile: string;
+  expectedFingerprint: string;
 } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-finalize-"));
   const projectsDir = path.join(root, "projects");
@@ -25,7 +29,14 @@ function setup(): {
   );
   fs.mkdirSync(projectDir, { recursive: true });
   fs.writeFileSync(source, "PAYLOAD\n");
-  return { root, source, projectsDir, archiveDir, ledgerFile };
+  return {
+    root,
+    source,
+    projectsDir,
+    archiveDir,
+    ledgerFile,
+    expectedFingerprint: PAYLOAD_FINGERPRINT,
+  };
 }
 
 test("records pending before archiving and archived after completion", () => {
@@ -74,6 +85,27 @@ test("records the destination in pending state before completion", () => {
   );
 });
 
+test("rejects archive finalization when the reviewed fingerprint changed", () => {
+  const fixture = setup();
+
+  assert.throws(
+    () =>
+      finalizeTranscript({
+        transcriptPath: fixture.source,
+        slug: "proj",
+        score: 14,
+        outcome: "memory-written",
+        memoryWritten: [],
+        ...fixture,
+        expectedFingerprint: "0".repeat(64),
+        scopePrefixes: ["proj"],
+      }),
+    /fingerprint/,
+  );
+  assert.equal(fs.existsSync(fixture.source), true);
+  assert.equal(fs.existsSync(fixture.ledgerFile), false);
+});
+
 test("recovery completes a pending archive without creating another memory record", () => {
   const fixture = setup();
   appendPendingArchive(fixture.ledgerFile, {
@@ -85,6 +117,7 @@ test("recovery completes a pending archive without creating another memory recor
     memory_written: ["memory/lessons.md"],
     archive_state: "pending",
     transcript_path: fixture.source,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -108,6 +141,32 @@ test("recovery completes a pending archive without creating another memory recor
   assert.deepEqual(records[1]?.memory_written, ["memory/lessons.md"]);
 });
 
+test("recovery keeps a source whose pending fingerprint no longer matches", () => {
+  const fixture = setup();
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "memory-written",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    source_fingerprint: "0".repeat(64),
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 0);
+  assert.match(result.unresolved[0]?.reason ?? "", /fingerprint/);
+  assert.equal(fs.existsSync(fixture.source), true);
+});
+
 test("a second recovery run leaves a completed archive unchanged", () => {
   const fixture = setup();
   appendPendingArchive(fixture.ledgerFile, {
@@ -119,6 +178,7 @@ test("a second recovery run leaves a completed archive unchanged", () => {
     memory_written: [],
     archive_state: "pending",
     transcript_path: fixture.source,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
   recoverPendingArchives({
     projectsDir: fixture.projectsDir,
@@ -154,6 +214,7 @@ test("recovery skips a pending archive outside the explicit scope", () => {
     memory_written: [],
     archive_state: "pending",
     transcript_path: workSource,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -188,6 +249,7 @@ test("recovery completes a pending record when its recorded archive exists", () 
     archive_state: "pending",
     transcript_path: fixture.source,
     archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -223,6 +285,7 @@ test("recovery rejects a recorded archive below a symlinked archive root", () =>
     archive_state: "pending",
     transcript_path: fixture.source,
     archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -255,6 +318,7 @@ test("recovery keeps a duplicate source when the archive root is symlinked", () 
     archive_state: "pending",
     transcript_path: fixture.source,
     archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -290,6 +354,7 @@ test("recovery rejects a recorded archive below a symlinked archive slug", () =>
     archive_state: "pending",
     transcript_path: fixture.source,
     archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -319,6 +384,7 @@ test("recovery reuses a recorded archive before removing a duplicate source", ()
     archive_state: "pending",
     transcript_path: fixture.source,
     archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({
@@ -352,6 +418,7 @@ test("recovery keeps the source when its recorded archive does not match", () =>
     archive_state: "pending",
     transcript_path: fixture.source,
     archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
   });
 
   const result = recoverPendingArchives({

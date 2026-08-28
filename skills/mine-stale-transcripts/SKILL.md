@@ -61,6 +61,8 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/score-prefilter.js" <path1> <path2>
 ```
 
 Read only rows marked `selected` for the deep-read step.
+A finalizable row includes a SHA-256 `fingerprint`.
+Carry that value through the review and approval step.
 Treat a row marked `unreadable` as a preservation problem, not low-score noise.
 Do not deep-read or archive an unreadable transcript.
 Treat a row marked `missing` as a non-finalizable race result.
@@ -99,12 +101,14 @@ Do not bulk-stage the Claude configuration repository.
 After the approved memory write, or after the operator confirms a rejection or low-score result, run the finalizer once for that transcript.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> <score> <memory-written|proposed-rejected|skipped-low-score> [memory.md ...]
+node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> <score> <memory-written|proposed-rejected|skipped-low-score> <fingerprint> [memory.md ...]
 ```
 
 The finalizer records a pending archive event before moving the transcript.
 It preserves the source until the destination payload exists.
 It then writes a completion event.
+It rejects an archivable source whose bytes no longer match the reviewed `fingerprint`.
+Rescore and obtain approval again when that happens.
 
 Use the recovery command in step 1 if the command stops before completion.
 Do not run the finalizer against a path outside the configured `projects/<slug>/` directory.

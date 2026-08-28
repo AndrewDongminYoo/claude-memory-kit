@@ -46,6 +46,9 @@ read-only    read-only         selected     required            agent-owned     
 4. The operator approves, edits, or rejects each proposal before any memory write.
 5. `finalize-transcript` records a pending event, archives only a validated main-session transcript without overwriting another archive, and records completion.
 
+An archivable finalization requires the SHA-256 `fingerprint` emitted by `score-prefilter`.
+If the transcript bytes differ, score and review the current transcript again.
+
 An interrupted finalization can be resumed without another memory write.
 
 ```bash
@@ -65,6 +68,7 @@ The finalizer records its outcome without archiving it.
 - The archive rejects traversal, source paths outside `projects/<slug>/`, and symbolic links.
 - Archive destinations use exclusive creation and preserve existing files with a numeric suffix.
 - The source remains until the archive payload exists.
+- Only `finalize-transcript` can remove an archivable source.
 - The ledger is append-only and excludes pending and completed sessions from new proposals.
 - Automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture and never reads or changes the operator's real `~/.claude` data.
 

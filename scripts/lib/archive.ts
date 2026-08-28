@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import {
+  fingerprintDescriptor,
+  isTranscriptFingerprint,
+} from "./fingerprint.ts";
 
 interface ArchiveOptions {
   transcriptPath: string;
@@ -7,6 +12,7 @@ interface ArchiveOptions {
   projectsDir: string;
   archiveDir: string;
   existingArchivePath?: string;
+  expectedFingerprint: string;
   onDestinationReady?: (destination: string) => void;
 }
 
@@ -115,15 +121,17 @@ function descriptorContentsMatch(left: number, right: number): boolean {
   }
 }
 
-function copyFromDescriptor(source: number, destination: string): void {
+function copyFromDescriptor(source: number, destination: string): string {
   const destinationDescriptor = fs.openSync(destination, "wx", 0o600);
   const buffer = Buffer.allocUnsafe(64 * 1024);
+  const hash = createHash("sha256");
   try {
     for (;;) {
       const bytesRead = fs.readSync(source, buffer, 0, buffer.length, null);
       if (bytesRead === 0) {
         break;
       }
+      hash.update(buffer.subarray(0, bytesRead));
       let offset = 0;
       while (offset < bytesRead) {
         offset += fs.writeSync(
@@ -135,6 +143,7 @@ function copyFromDescriptor(source: number, destination: string): void {
       }
     }
     fs.fsyncSync(destinationDescriptor);
+    return hash.digest("hex");
   } finally {
     fs.closeSync(destinationDescriptor);
   }
@@ -233,6 +242,11 @@ export function archiveTranscript(opts: ArchiveOptions): string {
   const archiveRoot = path.resolve(opts.archiveDir);
   const source = path.resolve(opts.transcriptPath);
   assertSingleSegmentSlug(opts.slug);
+  if (!isTranscriptFingerprint(opts.expectedFingerprint)) {
+    throw new Error(
+      "archive requires a reviewed fingerprint with a SHA-256 digest",
+    );
+  }
 
   const projectSlugDir = path.join(projectsRoot, opts.slug);
   if (path.dirname(source) !== projectSlugDir) {
@@ -303,6 +317,11 @@ export function archiveTranscript(opts: ArchiveOptions): string {
       );
       try {
         if (
+          fingerprintDescriptor(sourceDescriptor) !== opts.expectedFingerprint
+        ) {
+          throw new Error("source fingerprint changed since review");
+        }
+        if (
           sourceStat.size !== existingStat.size ||
           !descriptorContentsMatch(sourceDescriptor, existingDescriptor)
         ) {
@@ -342,7 +361,13 @@ export function archiveTranscript(opts: ArchiveOptions): string {
     );
     const temporaryPath = path.join(temporaryDir, base);
     try {
-      copyFromDescriptor(sourceDescriptor, temporaryPath);
+      const copiedFingerprint = copyFromDescriptor(
+        sourceDescriptor,
+        temporaryPath,
+      );
+      if (copiedFingerprint !== opts.expectedFingerprint) {
+        throw new Error("source fingerprint changed since review");
+      }
       assertUnchangedPrivateDirectory(
         archiveSlugDir,
         archiveSlugStat,

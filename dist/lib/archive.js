@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { fingerprintDescriptor, isTranscriptFingerprint, } from "./fingerprint.js";
 function assertSingleSegmentSlug(slug) {
     if (slug.length === 0 ||
         slug === "." ||
@@ -80,18 +82,21 @@ function descriptorContentsMatch(left, right) {
 function copyFromDescriptor(source, destination) {
     const destinationDescriptor = fs.openSync(destination, "wx", 0o600);
     const buffer = Buffer.allocUnsafe(64 * 1024);
+    const hash = createHash("sha256");
     try {
         for (;;) {
             const bytesRead = fs.readSync(source, buffer, 0, buffer.length, null);
             if (bytesRead === 0) {
                 break;
             }
+            hash.update(buffer.subarray(0, bytesRead));
             let offset = 0;
             while (offset < bytesRead) {
                 offset += fs.writeSync(destinationDescriptor, buffer, offset, bytesRead - offset);
             }
         }
         fs.fsyncSync(destinationDescriptor);
+        return hash.digest("hex");
     }
     finally {
         fs.closeSync(destinationDescriptor);
@@ -168,6 +173,9 @@ export function archiveTranscript(opts) {
     const archiveRoot = path.resolve(opts.archiveDir);
     const source = path.resolve(opts.transcriptPath);
     assertSingleSegmentSlug(opts.slug);
+    if (!isTranscriptFingerprint(opts.expectedFingerprint)) {
+        throw new Error("archive requires a reviewed fingerprint with a SHA-256 digest");
+    }
     const projectSlugDir = path.join(projectsRoot, opts.slug);
     if (path.dirname(source) !== projectSlugDir) {
         throw new Error("transcript must be a direct child of the configured project slug directory");
@@ -207,6 +215,9 @@ export function archiveTranscript(opts) {
             assertResolvedDirectChild(archiveSlugDir, existingDestination, "existing archive");
             const existingDescriptor = openValidatedFile(existingDestination, existingStat, "existing archive");
             try {
+                if (fingerprintDescriptor(sourceDescriptor) !== opts.expectedFingerprint) {
+                    throw new Error("source fingerprint changed since review");
+                }
                 if (sourceStat.size !== existingStat.size ||
                     !descriptorContentsMatch(sourceDescriptor, existingDescriptor)) {
                     throw new Error("existing archive does not match the transcript source");
@@ -229,7 +240,10 @@ export function archiveTranscript(opts) {
         const temporaryDir = fs.mkdtempSync(path.join(archiveSlugDir, ".cmk-archive-"));
         const temporaryPath = path.join(temporaryDir, base);
         try {
-            copyFromDescriptor(sourceDescriptor, temporaryPath);
+            const copiedFingerprint = copyFromDescriptor(sourceDescriptor, temporaryPath);
+            if (copiedFingerprint !== opts.expectedFingerprint) {
+                throw new Error("source fingerprint changed since review");
+            }
             assertUnchangedPrivateDirectory(archiveSlugDir, archiveSlugStat, "archive slug directory");
             const destinationName = copyToExclusiveDestination(temporaryPath, archiveSlugDir, base);
             const destination = path.join(archiveSlugDir, destinationName);

@@ -297,21 +297,30 @@ export function verifyPluginCopy(
     ) {
       throw new Error("compiled score-prefilter did not reject a symlink");
     }
-    requireSuccess(
-      runNode(
-        copyRoot,
-        configRoot,
-        "dist/score-prefilter.js",
-        [transcript],
-        verificationEnv,
-      ),
-      "compiled score-prefilter",
+    const scored = runNode(
+      copyRoot,
+      configRoot,
+      "dist/score-prefilter.js",
+      [transcript],
+      verificationEnv,
     );
+    requireSuccess(scored, "compiled score-prefilter");
+    const fingerprint = (JSON.parse(scored.stdout) as { fingerprint?: unknown })
+      .fingerprint;
+    if (typeof fingerprint !== "string") {
+      throw new Error("compiled score-prefilter did not emit a fingerprint");
+    }
     const finalized = runNode(
       copyRoot,
       configRoot,
       "dist/finalize-transcript.js",
-      [transcript, "verification-project", "0", "proposed-rejected"],
+      [
+        transcript,
+        "verification-project",
+        "0",
+        "proposed-rejected",
+        fingerprint,
+      ],
       verificationEnv,
     );
     requireSuccess(finalized, "compiled finalize-transcript");

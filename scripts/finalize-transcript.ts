@@ -21,18 +21,21 @@ const outcomes = new Set<Outcome>([
 
 function main(): void {
   const scopePrefixes = parseScopeSlugPrefixes();
-  const [transcriptPath, slug, scoreInput, outcomeInput, ...memoryWritten] =
+  const [transcriptPath, slug, scoreInput, outcomeInput, ...remainingArgs] =
     process.argv.slice(2);
   const score = Number(scoreInput);
+  const expectedFingerprint =
+    outcomeInput === "unreadable" ? undefined : remainingArgs.shift();
   if (
     !transcriptPath ||
     !slug ||
     !Number.isFinite(score) ||
     !outcomeInput ||
-    !outcomes.has(outcomeInput as Outcome)
+    !outcomes.has(outcomeInput as Outcome) ||
+    (outcomeInput !== "unreadable" && !expectedFingerprint)
   ) {
     process.stderr.write(
-      "usage: finalize-transcript <transcript.jsonl> <slug> <score> <outcome> [memory.md ...]\n",
+      "usage: finalize-transcript <transcript.jsonl> <slug> <score> <outcome> [fingerprint] [memory.md ...]\n",
     );
     process.exit(2);
   }
@@ -45,11 +48,12 @@ function main(): void {
     slug,
     score,
     outcome: outcomeInput as Outcome,
-    memoryWritten,
+    memoryWritten: remainingArgs,
     projectsDir: configuredProjectsDir,
     archiveDir: archiveDir(root),
     ledgerFile: ledgerPath(root),
     scopePrefixes,
+    expectedFingerprint,
   });
   process.stdout.write(result.archivePath ? `${result.archivePath}\n` : "\n");
 }

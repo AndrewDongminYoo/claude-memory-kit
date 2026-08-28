@@ -9,14 +9,16 @@ const outcomes = new Set([
 ]);
 function main() {
     const scopePrefixes = parseScopeSlugPrefixes();
-    const [transcriptPath, slug, scoreInput, outcomeInput, ...memoryWritten] = process.argv.slice(2);
+    const [transcriptPath, slug, scoreInput, outcomeInput, ...remainingArgs] = process.argv.slice(2);
     const score = Number(scoreInput);
+    const expectedFingerprint = outcomeInput === "unreadable" ? undefined : remainingArgs.shift();
     if (!transcriptPath ||
         !slug ||
         !Number.isFinite(score) ||
         !outcomeInput ||
-        !outcomes.has(outcomeInput)) {
-        process.stderr.write("usage: finalize-transcript <transcript.jsonl> <slug> <score> <outcome> [memory.md ...]\n");
+        !outcomes.has(outcomeInput) ||
+        (outcomeInput !== "unreadable" && !expectedFingerprint)) {
+        process.stderr.write("usage: finalize-transcript <transcript.jsonl> <slug> <score> <outcome> [fingerprint] [memory.md ...]\n");
         process.exit(2);
     }
     assertSlugInScope(slug, scopePrefixes);
@@ -28,11 +30,12 @@ function main() {
         slug,
         score,
         outcome: outcomeInput,
-        memoryWritten,
+        memoryWritten: remainingArgs,
         projectsDir: configuredProjectsDir,
         archiveDir: archiveDir(root),
         ledgerFile: ledgerPath(root),
         scopePrefixes,
+        expectedFingerprint,
     });
     process.stdout.write(result.archivePath ? `${result.archivePath}\n` : "\n");
 }

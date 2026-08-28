@@ -1,6 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 export const SCOPE_SLUG_PREFIXES_ENV = "CMK_SCOPE_SLUG_PREFIXES";
+/** Signals that containment or file metadata could not be verified. */
+export class TranscriptPathValidationError extends Error {
+    code;
+    constructor(error) {
+        super(`transcript path validation failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.name = "TranscriptPathValidationError";
+        this.code = error?.code;
+    }
+}
+export function isTranscriptPathValidationError(error) {
+    return error instanceof TranscriptPathValidationError;
+}
 /**
  * Parse the explicit project-slug allowlist shared by every transcript CLI.
  * An omitted or empty value is unsafe because it could include another account.
@@ -97,9 +109,20 @@ export function openSafeTranscriptFile(transcriptPath, slug, configuredProjectsD
     const candidate = path.resolve(transcriptPath);
     let descriptor;
     try {
-        const projectsStat = assertCurrentSafeTranscriptPath(transcriptPath, slug, configuredProjectsDir);
+        let projectsStat;
+        try {
+            projectsStat = assertCurrentSafeTranscriptPath(transcriptPath, slug, configuredProjectsDir);
+        }
+        catch (error) {
+            throw new TranscriptPathValidationError(error);
+        }
         descriptor = fs.openSync(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        assertCurrentSafeTranscriptPath(transcriptPath, slug, configuredProjectsDir, fs.fstatSync(descriptor), projectsStat);
+        try {
+            assertCurrentSafeTranscriptPath(transcriptPath, slug, configuredProjectsDir, fs.fstatSync(descriptor), projectsStat);
+        }
+        catch (error) {
+            throw new TranscriptPathValidationError(error);
+        }
         return descriptor;
     }
     catch (error) {

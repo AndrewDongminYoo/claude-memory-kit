@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fingerprintContents } from "./lib/fingerprint.ts";
 import { projectsDir, resolveClaudeRoot } from "./lib/paths.ts";
 import {
   isUnreadableTranscript,
@@ -11,6 +12,7 @@ import {
 import {
   assertDirectTranscriptPath,
   assertSlugInScope,
+  isTranscriptPathValidationError,
   openSafeTranscriptFile,
   parseScopeSlugPrefixes,
 } from "./lib/scope.ts";
@@ -32,6 +34,7 @@ interface Row {
   turns?: number;
   unreadable?: boolean;
   missing?: boolean;
+  fingerprint?: string;
   error?: string;
   [key: string]: unknown;
 }
@@ -101,6 +104,12 @@ function main(): void {
         configuredProjectsDir,
       );
     } catch (error) {
+      if (isTranscriptPathValidationError(error)) {
+        if (transcriptReadErrorCode(error) === "ENOENT") {
+          return missingRow(transcriptPath, slug, error);
+        }
+        throw error;
+      }
       if (transcriptReadErrorCode(error) === "ENOENT") {
         return missingRow(transcriptPath, slug, error);
       }
@@ -110,7 +119,8 @@ function main(): void {
       throw error;
     }
     try {
-      const raw = fs.readFileSync(descriptor, "utf8");
+      const contents = fs.readFileSync(descriptor);
+      const raw = contents.toString("utf8");
       if (isUnreadableTranscript(raw)) {
         return {
           path: transcriptPath,
@@ -120,9 +130,20 @@ function main(): void {
           error: "no valid JSONL transcript entries",
         };
       }
-      return { path: transcriptPath, slug, ...scoreTranscript(raw) };
+      return {
+        path: transcriptPath,
+        slug,
+        fingerprint: fingerprintContents(contents),
+        ...scoreTranscript(raw),
+      };
     } catch (error) {
-      return unreadableRow(transcriptPath, slug, error);
+      if (transcriptReadErrorCode(error) === "ENOENT") {
+        return missingRow(transcriptPath, slug, error);
+      }
+      if (isUnreadableTranscriptReadError(error)) {
+        return unreadableRow(transcriptPath, slug, error);
+      }
+      throw error;
     } finally {
       if (descriptor !== undefined) {
         fs.closeSync(descriptor);

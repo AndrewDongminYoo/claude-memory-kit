@@ -24,6 +24,7 @@ const rec = (over: Partial<LedgerRecord>): LedgerRecord => ({
   score: 1,
   outcome: "memory-written",
   memory_written: [],
+  source_fingerprint: "0".repeat(64),
   ...over,
 });
 
