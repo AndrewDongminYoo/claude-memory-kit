@@ -126,7 +126,7 @@ export function finalizeTranscript(options: FinalizeOptions): {
   }
   const expectedFingerprint = assertReviewedFingerprint(options);
   const attemptId = randomUUID();
-  const pending = ledgerRecord(options, attemptId);
+  let pending = ledgerRecord(options, attemptId);
   appendPendingArchive(options.ledgerFile, pending);
   let archivePath: string;
   try {
@@ -137,16 +137,12 @@ export function finalizeTranscript(options: FinalizeOptions): {
       archiveDir: options.archiveDir,
       expectedFingerprint,
       onDestinationReserved: (destination) => {
-        appendPendingArchive(
-          options.ledgerFile,
-          ledgerRecord(options, attemptId, destination, false),
-        );
+        pending = ledgerRecord(options, attemptId, destination, false);
+        appendPendingArchive(options.ledgerFile, pending);
       },
       onDestinationReady: (destination) => {
-        appendPendingArchive(
-          options.ledgerFile,
-          ledgerRecord(options, attemptId, destination, true),
-        );
+        pending = ledgerRecord(options, attemptId, destination, true);
+        appendPendingArchive(options.ledgerFile, pending);
       },
     });
   } catch (error) {
@@ -257,7 +253,6 @@ export function recoverPendingArchives(
       result.skippedOutOfScope += 1;
       continue;
     }
-    let retainedArchive = false;
     try {
       assertDirectTranscriptPath(
         record.transcript_path,
@@ -302,7 +297,6 @@ export function recoverPendingArchives(
           });
           continue;
         } else {
-          retainedArchive = true;
           if (fs.existsSync(record.transcript_path)) {
             archiveTranscript({
               transcriptPath: record.transcript_path,
@@ -353,7 +347,7 @@ export function recoverPendingArchives(
         });
       }
     } catch (error) {
-      if (error instanceof TranscriptVersionChangedError && !retainedArchive) {
+      if (error instanceof TranscriptVersionChangedError) {
         if (record.attempt_id) {
           appendAbortedArchive(options.ledgerFile, record);
           continue;

@@ -115,16 +115,16 @@ test("rejects archive finalization when the reviewed fingerprint changed", () =>
 
 test("releases a source for rescoring when it changes during archiving", () => {
   const fixture = setup();
-  const originalRenameSync = fs.renameSync;
+  const originalLinkSync = fs.linkSync;
   let sourceChanged = false;
-  fs.renameSync = ((oldPath, newPath) => {
-    const result = originalRenameSync(oldPath, newPath);
+  fs.linkSync = ((existingPath, newPath) => {
+    const result = originalLinkSync(existingPath, newPath);
     if (!sourceChanged) {
       sourceChanged = true;
       fs.appendFileSync(fixture.source, "RESUMED\n");
     }
     return result;
-  }) as typeof fs.renameSync;
+  }) as typeof fs.linkSync;
 
   try {
     assert.throws(
@@ -141,7 +141,7 @@ test("releases a source for rescoring when it changes during archiving", () => {
       /source changed during archiving/,
     );
   } finally {
-    fs.renameSync = originalRenameSync;
+    fs.linkSync = originalLinkSync;
   }
 
   assert.equal(fs.existsSync(fixture.source), true);
@@ -153,7 +153,7 @@ test("releases a source for rescoring when it changes during archiving", () => {
 });
 
 test(
-  "records a published destination when post-publish rollback fails",
+  "records a published destination when post-publish sync fails",
   { skip: process.platform === "win32" },
   () => {
     const fixture = setup();
@@ -161,96 +161,7 @@ test(
     const originalOpenSync = fs.openSync;
     const originalCloseSync = fs.closeSync;
     const originalFsyncSync = fs.fsyncSync;
-    const originalUnlinkSync = fs.unlinkSync;
-    const descriptors = new Map<
-      number,
-      { pathname: string; flags: string | number }
-    >();
-    fs.openSync = ((pathname, flags, mode) => {
-      const descriptor = originalOpenSync(pathname, flags, mode);
-      descriptors.set(descriptor, {
-        pathname: path.resolve(pathname.toString()),
-        flags,
-      });
-      return descriptor;
-    }) as typeof fs.openSync;
-    fs.closeSync = ((descriptor: number) => {
-      descriptors.delete(descriptor);
-      return originalCloseSync(descriptor);
-    }) as typeof fs.closeSync;
-    fs.fsyncSync = ((descriptor: number) => {
-      const opened = descriptors.get(descriptor);
-      if (
-        opened?.pathname === destination &&
-        typeof opened.flags === "number" &&
-        (opened.flags & fs.constants.O_WRONLY) !== 0
-      ) {
-        throw new Error("post-publish sync failed");
-      }
-      return originalFsyncSync(descriptor);
-    }) as typeof fs.fsyncSync;
-    fs.unlinkSync = ((pathname) => {
-      if (path.resolve(pathname.toString()) === destination) {
-        throw new Error("rollback unlink failed");
-      }
-      return originalUnlinkSync(pathname);
-    }) as typeof fs.unlinkSync;
-
-    try {
-      assert.throws(
-        () =>
-          finalizeTranscript({
-            transcriptPath: fixture.source,
-            slug: "proj",
-            score: 14,
-            outcome: "memory-written",
-            memoryWritten: [],
-            ...fixture,
-            scopePrefixes: ["proj"],
-          }),
-        /archive rollback failed after post-publish sync failed/,
-      );
-    } finally {
-      fs.openSync = originalOpenSync;
-      fs.closeSync = originalCloseSync;
-      fs.fsyncSync = originalFsyncSync;
-      fs.unlinkSync = originalUnlinkSync;
-    }
-
-    assert.equal(fs.existsSync(fixture.source), true);
-    assert.equal(fs.existsSync(destination), true);
-    assert.deepEqual(
-      readLedger(fixture.ledgerFile).map((record) => record.archive_state),
-      ["pending", "pending"],
-    );
-    assert.equal(
-      pendingArchives(fixture.ledgerFile)[0]?.archive_path,
-      destination,
-    );
-  },
-);
-
-test(
-  "keeps a pending attempt when source-change rollback cannot sync",
-  { skip: process.platform === "win32" },
-  () => {
-    const fixture = setup();
-    const archiveSlugDir = path.join(fixture.archiveDir, "proj");
-    const originalRenameSync = fs.renameSync;
-    const originalOpenSync = fs.openSync;
-    const originalCloseSync = fs.closeSync;
-    const originalFsyncSync = fs.fsyncSync;
     const directoryDescriptors = new Map<number, string>();
-    let sourceChanged = false;
-    let archiveSlugSyncsAfterLink = 0;
-    fs.renameSync = ((oldPath, newPath) => {
-      const result = originalRenameSync(oldPath, newPath);
-      if (!sourceChanged) {
-        sourceChanged = true;
-        fs.appendFileSync(fixture.source, "RESUMED\n");
-      }
-      return result;
-    }) as typeof fs.renameSync;
     fs.openSync = ((pathname, flags, mode) => {
       const descriptor = originalOpenSync(pathname, flags, mode);
       if (
@@ -266,11 +177,8 @@ test(
       return originalCloseSync(descriptor);
     }) as typeof fs.closeSync;
     fs.fsyncSync = ((descriptor: number) => {
-      if (directoryDescriptors.get(descriptor) === archiveSlugDir) {
-        archiveSlugSyncsAfterLink += 1;
-        if (sourceChanged && archiveSlugSyncsAfterLink === 2) {
-          throw new Error("rollback sync failed");
-        }
+      if (directoryDescriptors.get(descriptor) === path.dirname(destination)) {
+        throw new Error("post-publish sync failed");
       }
       return originalFsyncSync(descriptor);
     }) as typeof fs.fsyncSync;
@@ -287,21 +195,24 @@ test(
             ...fixture,
             scopePrefixes: ["proj"],
           }),
-        /archive rollback failed/,
+        /post-publish sync failed/,
       );
     } finally {
-      fs.renameSync = originalRenameSync;
       fs.openSync = originalOpenSync;
       fs.closeSync = originalCloseSync;
       fs.fsyncSync = originalFsyncSync;
     }
 
     assert.equal(fs.existsSync(fixture.source), true);
+    assert.equal(fs.existsSync(destination), true);
     assert.deepEqual(
       readLedger(fixture.ledgerFile).map((record) => record.archive_state),
-      ["pending", "pending", "pending"],
+      ["pending", "pending"],
     );
-    assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
+    assert.equal(
+      pendingArchives(fixture.ledgerFile)[0]?.archive_path,
+      destination,
+    );
   },
 );
 
@@ -469,7 +380,7 @@ test("recovery retains a legacy pending record when its source changed", () => {
   assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
 });
 
-test("recovery retains a destination-bound pending attempt when its source changed", () => {
+test("recovery aborts a destination-bound attempt when its source changed", () => {
   const fixture = setup();
   const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");
   fs.mkdirSync(path.dirname(archivePath), { recursive: true });
@@ -497,16 +408,15 @@ test("recovery retains a destination-bound pending attempt when its source chang
   });
 
   assert.equal(result.completed, 0);
-  assert.match(result.unresolved[0]?.reason ?? "", /fingerprint/);
+  assert.deepEqual(result.unresolved, []);
   assert.deepEqual(
     readLedger(fixture.ledgerFile).map((record) => record.archive_state),
-    ["pending"],
+    ["pending", "aborted"],
   );
-  assert.equal(
-    pendingArchives(fixture.ledgerFile)[0]?.archive_path,
-    archivePath,
-  );
-  assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
+  assert.deepEqual(pendingArchives(fixture.ledgerFile), []);
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], []);
+  assert.equal(fs.readFileSync(archivePath, "utf8"), "PAYLOAD\n");
+  assert.equal(fs.readFileSync(fixture.source, "utf8"), "PAYLOAD\nRESUMED\n");
 });
 
 test("a second recovery run leaves a completed archive unchanged", () => {
