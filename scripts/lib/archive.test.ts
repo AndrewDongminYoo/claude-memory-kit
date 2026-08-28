@@ -75,6 +75,102 @@ test("archives on Windows when directory fsync is unavailable", () => {
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
 });
 
+test("tolerates an archive slug directory created concurrently", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const archiveSlugDir = path.join(archiveDir, "proj");
+  const originalMkdirSync = fs.mkdirSync;
+  let createdConcurrently = false;
+
+  fs.mkdirSync = ((pathname, options) => {
+    if (pathname === archiveSlugDir && !createdConcurrently) {
+      createdConcurrently = true;
+      originalMkdirSync(archiveSlugDir, { recursive: true, mode: 0o700 });
+    }
+    return originalMkdirSync(pathname, options);
+  }) as typeof fs.mkdirSync;
+
+  try {
+    const destination = archiveTranscript({
+      transcriptPath: src,
+      slug: "proj",
+      projectsDir: path.join(root, "projects"),
+      archiveDir,
+    });
+
+    assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
+  } finally {
+    fs.mkdirSync = originalMkdirSync;
+  }
+});
+
+test(
+  "syncs newly created archive directory entries before source removal",
+  { skip: process.platform === "win32" },
+  () => {
+    const { root, src } = setup();
+    const archiveDir = path.join(root, ".transcript-archive");
+    const archiveSlugDir = path.join(archiveDir, "proj");
+    const expectedParents = new Set([path.dirname(archiveDir), archiveDir]);
+    const directoryDescriptors = new Map<number, string>();
+    const syncedDirectories = new Set<string>();
+    const originalOpenSync = fs.openSync;
+    const originalFsyncSync = fs.fsyncSync;
+    const originalMkdirSync = fs.mkdirSync;
+    const originalUnlinkSync = fs.unlinkSync;
+    let slugCreatedConcurrently = false;
+
+    fs.openSync = ((pathname, flags, mode) => {
+      const descriptor = originalOpenSync(pathname, flags, mode);
+      if (
+        typeof flags === "number" &&
+        (flags & fs.constants.O_DIRECTORY) !== 0
+      ) {
+        directoryDescriptors.set(descriptor, path.resolve(pathname.toString()));
+      }
+      return descriptor;
+    }) as typeof fs.openSync;
+    fs.fsyncSync = ((descriptor: number) => {
+      const directory = directoryDescriptors.get(descriptor);
+      if (directory) syncedDirectories.add(directory);
+      return originalFsyncSync(descriptor);
+    }) as typeof fs.fsyncSync;
+    fs.mkdirSync = ((pathname, options) => {
+      if (pathname === archiveSlugDir && !slugCreatedConcurrently) {
+        slugCreatedConcurrently = true;
+        originalMkdirSync(pathname, { recursive: true, mode: 0o700 });
+      }
+      return originalMkdirSync(pathname, options);
+    }) as typeof fs.mkdirSync;
+    fs.unlinkSync = ((pathname) => {
+      if (pathname === src) {
+        for (const parent of expectedParents) {
+          assert.equal(
+            syncedDirectories.has(parent),
+            true,
+            `${parent} must be synced before removing the source`,
+          );
+        }
+      }
+      return originalUnlinkSync(pathname);
+    }) as typeof fs.unlinkSync;
+
+    try {
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir,
+      });
+    } finally {
+      fs.openSync = originalOpenSync;
+      fs.fsyncSync = originalFsyncSync;
+      fs.mkdirSync = originalMkdirSync;
+      fs.unlinkSync = originalUnlinkSync;
+    }
+  },
+);
+
 test("collision gets a numeric suffix, never overwrites", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");

@@ -174,13 +174,19 @@ export function archiveTranscript(opts) {
     assertResolvedDirectChild(projectsRoot, projectSlugDir, "project slug directory");
     assertResolvedDirectChild(projectSlugDir, source, "transcript source");
     assertPrivateDirectory(path.dirname(archiveRoot), "archive directory parent");
-    fs.mkdirSync(archiveRoot, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(archiveRoot, {
+        recursive: true,
+        mode: 0o700,
+    });
     assertPrivateDirectory(archiveRoot, "archive directory");
+    syncDirectory(path.dirname(archiveRoot));
     const archiveSlugDir = path.join(archiveRoot, opts.slug);
-    if (!fs.existsSync(archiveSlugDir)) {
-        fs.mkdirSync(archiveSlugDir, { mode: 0o700 });
-    }
+    fs.mkdirSync(archiveSlugDir, {
+        recursive: true,
+        mode: 0o700,
+    });
     const archiveSlugStat = assertPrivateDirectory(archiveSlugDir, "archive slug directory");
+    syncDirectory(archiveRoot);
     assertResolvedDirectChild(archiveRoot, archiveSlugDir, "archive slug directory");
     const base = path.basename(source);
     if (path.extname(base) !== ".jsonl") {
