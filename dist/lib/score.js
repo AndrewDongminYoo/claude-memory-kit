@@ -70,9 +70,9 @@ export function parseTranscript(raw) {
     }
     return entries;
 }
-/** Returns true when nonblank input contains no valid transcript entry. */
+/** Returns true when input contains no valid transcript entry. */
 export function isUnreadableTranscript(raw) {
-    return raw.trim().length > 0 && parseTranscript(raw).length === 0;
+    return parseTranscript(raw).length === 0;
 }
 // --- Signal patterns -------------------------------------------------------
 /** Operator corrections/directives — the strongest memory-worthy signal. */

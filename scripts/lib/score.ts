@@ -95,9 +95,9 @@ export function parseTranscript(raw: string): TranscriptEntry[] {
   return entries;
 }
 
-/** Returns true when nonblank input contains no valid transcript entry. */
+/** Returns true when input contains no valid transcript entry. */
 export function isUnreadableTranscript(raw: string): boolean {
-  return raw.trim().length > 0 && parseTranscript(raw).length === 0;
+  return parseTranscript(raw).length === 0;
 }
 
 // --- Signal patterns -------------------------------------------------------

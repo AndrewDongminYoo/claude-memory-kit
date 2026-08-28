@@ -43,7 +43,7 @@ test("parseTranscript reads string and array content, counts tool_use, skips bad
 
 test("detects a transcript with no valid JSONL entries as unreadable", () => {
   assert.equal(isUnreadableTranscript("{ invalid\n"), true);
-  assert.equal(isUnreadableTranscript("\n"), false, "empty is low-score data");
+  assert.equal(isUnreadableTranscript("\n"), true);
   assert.equal(isUnreadableTranscript('{"type":"user"}\n'), false);
 });
 
