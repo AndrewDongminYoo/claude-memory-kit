@@ -41,12 +41,12 @@ read-only    read-only         selected     required            agent-owned     
 ```
 
 1. `scan-cold` lists un-mined main-session transcripts in the configured scope that are at least 14 days old by default.
-2. `score-prefilter` selects the highest-value configured-scope transcripts for a deep read and reports malformed JSONL as `unreadable`.
+2. `score-prefilter` selects the highest-value configured-scope transcripts for a deep read and reports malformed JSONL as `unreadable` with a raw-byte fingerprint.
 3. The agent proposes source-backed native Markdown memory entries from selected transcripts.
 4. The operator approves, edits, or rejects each proposal before any memory write.
 5. `finalize-transcript` records a pending event, reserves an archive destination in the ledger before it publishes the archive payload, archives only a validated main-session transcript without overwriting another archive, and records completion.
 
-An archivable finalization requires the SHA-256 `fingerprint` emitted by `score-prefilter`.
+Every finalization requires the SHA-256 `fingerprint` emitted by `score-prefilter`.
 If the transcript bytes differ, score and review the current transcript again.
 If the source changes during archiving, the finalizer records an `aborted` attempt and leaves the source available for a new score and approval.
 
@@ -58,7 +58,9 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/recover-pending-archives.js"
 ```
 
 An `unreadable` transcript stays in its original location.
-The finalizer records its outcome without archiving it.
+The finalizer records its outcome only when the reviewed raw bytes still match the supplied fingerprint.
+An access error has no fingerprint, so leave that transcript in place without a ledger event and rescore it after access returns.
+An unreadable ledger event is an audit record and does not exclude the transcript from a later rescore.
 
 ## Safety boundary
 
@@ -71,7 +73,8 @@ The finalizer records its outcome without archiving it.
 - Archive destinations use exclusive creation and preserve existing files with a numeric suffix.
 - The source remains until the archive payload exists.
 - Only `finalize-transcript` can remove an archivable source.
-- The ledger is append-only and excludes pending and completed sessions from new proposals.
+- The ledger is append-only and excludes pending and completed archivable sessions from new proposals.
+- Ledger reads and writes reject symbolic-link path components and use one verified descriptor for repair and append.
 - An `aborted` archive attempt releases only its matching transcript version for another score and approval.
 - Automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture and never reads or changes the operator's real `~/.claude` data.
 

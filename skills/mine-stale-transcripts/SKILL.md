@@ -61,17 +61,20 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/score-prefilter.js" <path1> <path2>
 ```
 
 Read only rows marked `selected` for the deep-read step.
-A finalizable row includes a SHA-256 `fingerprint`.
+A finalizable row, including a readable malformed row marked `unreadable`, includes a SHA-256 `fingerprint`.
 Carry that value through the review and approval step.
 Treat a row marked `unreadable` as a preservation problem, not low-score noise.
 Do not deep-read or archive an unreadable transcript.
+If an unreadable row has no fingerprint, it could not be read.
+Leave it in place and do not write a ledger event until a later score can provide a fingerprint.
 Treat a row marked `missing` as a non-finalizable race result.
 Do not deep-read, archive, or ledger it.
 
 After the operator agrees to record the result, preserve its source file and write only its ledger outcome.
+The ledger outcome is an audit record and leaves the unreadable transcript eligible for a later rescore.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> 0 unreadable
+node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> 0 unreadable <fingerprint>
 ```
 
 ## 4. Deep-read and propose memory
@@ -107,7 +110,7 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slu
 The finalizer records a pending archive event before it reserves the archive destination.
 It records that destination before it publishes or synchronizes the archive payload, or removes the source.
 It then writes a completion event.
-It rejects an archivable source whose bytes no longer match the reviewed `fingerprint`.
+It rejects a source whose bytes no longer match the reviewed `fingerprint`.
 If the source changes during archiving, it records an `aborted` attempt and leaves the source for a new score and approval.
 Rescore and obtain approval again when that happens.
 If archive rollback fails, recovery retains the destination-bound pending record until it can verify the destination.

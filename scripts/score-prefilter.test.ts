@@ -86,6 +86,10 @@ test("reports malformed JSONL as unreadable and never selects it", () => {
   const row = JSON.parse(result.stdout) as Record<string, unknown>;
   assert.equal(row.unreadable, true);
   assert.equal(row.selected, false);
+  assert.equal(
+    row.fingerprint,
+    createHash("sha256").update("{ invalid\n").digest("hex"),
+  );
 });
 
 test("prints a content fingerprint for a finalizable transcript", () => {

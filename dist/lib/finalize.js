@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { archiveTranscript, TranscriptVersionChangedError } from "./archive.js";
 import { fingerprintDescriptor, isTranscriptFingerprint, } from "./fingerprint.js";
 import { appendLedger, appendAbortedArchive, appendCompletedArchive, appendPendingArchive, pendingArchives, } from "./ledger.js";
-import { assertDirectTranscriptPath, assertSafeTranscriptPath, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, openSafeTranscriptFile, } from "./scope.js";
+import { assertDirectTranscriptPath, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, openSafeTranscriptFile, } from "./scope.js";
 function processedAt(now) {
     return new Date(now ?? Date.now()).toISOString();
 }
@@ -27,14 +27,25 @@ function ledgerRecord(options, attemptId, archivePath, archiveReady) {
         attempt_id: attemptId,
     };
 }
+function sameFileVersion(left, right) {
+    return (left.dev === right.dev &&
+        left.ino === right.ino &&
+        left.size === right.size &&
+        left.mtimeMs === right.mtimeMs &&
+        left.ctimeMs === right.ctimeMs);
+}
 function assertReviewedFingerprint(options) {
     if (!isTranscriptFingerprint(options.expectedFingerprint)) {
-        throw new Error("archivable finalization requires a reviewed fingerprint");
+        throw new Error("finalization requires a reviewed fingerprint");
     }
     const descriptor = openSafeTranscriptFile(options.transcriptPath, options.slug, options.projectsDir);
     try {
+        const before = fs.fstatSync(descriptor);
         if (fingerprintDescriptor(descriptor) !== options.expectedFingerprint) {
             throw new Error("source fingerprint changed since review");
+        }
+        if (!sameFileVersion(before, fs.fstatSync(descriptor))) {
+            throw new Error("source changed during fingerprint validation");
         }
         return options.expectedFingerprint;
     }
@@ -46,7 +57,7 @@ function assertReviewedFingerprint(options) {
 export function finalizeTranscript(options) {
     assertSlugInScope(options.slug, options.scopePrefixes);
     if (options.outcome === "unreadable") {
-        assertSafeTranscriptPath(options.transcriptPath, options.slug, options.projectsDir);
+        assertReviewedFingerprint(options);
         appendLedger(options.ledgerFile, ledgerRecord(options));
         return {};
     }

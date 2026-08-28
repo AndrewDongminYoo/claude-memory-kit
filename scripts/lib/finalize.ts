@@ -17,7 +17,6 @@ import {
 } from "./ledger.ts";
 import {
   assertDirectTranscriptPath,
-  assertSafeTranscriptPath,
   assertSlugInScope,
   isSingleSegmentSlug,
   isSlugInScope,
@@ -82,9 +81,19 @@ function ledgerRecord(
   };
 }
 
+function sameFileVersion(left: fs.Stats, right: fs.Stats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
 function assertReviewedFingerprint(options: FinalizeOptions): string {
   if (!isTranscriptFingerprint(options.expectedFingerprint)) {
-    throw new Error("archivable finalization requires a reviewed fingerprint");
+    throw new Error("finalization requires a reviewed fingerprint");
   }
   const descriptor = openSafeTranscriptFile(
     options.transcriptPath,
@@ -92,8 +101,12 @@ function assertReviewedFingerprint(options: FinalizeOptions): string {
     options.projectsDir,
   );
   try {
+    const before = fs.fstatSync(descriptor);
     if (fingerprintDescriptor(descriptor) !== options.expectedFingerprint) {
       throw new Error("source fingerprint changed since review");
+    }
+    if (!sameFileVersion(before, fs.fstatSync(descriptor))) {
+      throw new Error("source changed during fingerprint validation");
     }
     return options.expectedFingerprint;
   } finally {
@@ -107,11 +120,7 @@ export function finalizeTranscript(options: FinalizeOptions): {
 } {
   assertSlugInScope(options.slug, options.scopePrefixes);
   if (options.outcome === "unreadable") {
-    assertSafeTranscriptPath(
-      options.transcriptPath,
-      options.slug,
-      options.projectsDir,
-    );
+    assertReviewedFingerprint(options);
     appendLedger(options.ledgerFile, ledgerRecord(options));
     return {};
   }

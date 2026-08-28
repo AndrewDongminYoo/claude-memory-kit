@@ -127,6 +127,7 @@ function main(): void {
           slug,
           score: 0,
           unreadable: true,
+          fingerprint: fingerprintContents(contents),
           error: "no valid JSONL transcript entries",
         };
       }

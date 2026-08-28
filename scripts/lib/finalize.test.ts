@@ -799,9 +799,74 @@ test("records an unreadable transcript without archiving it", () => {
     })),
     [{ outcome: "unreadable", archiveState: undefined }],
   );
+  assert.equal(
+    readLedger(fixture.ledgerFile).at(-1)?.source_fingerprint,
+    fixture.expectedFingerprint,
+  );
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], []);
 });
 
-test("records an unreadable transcript when it cannot be opened for reading", () => {
+test("rejects an unreadable outcome when the reviewed bytes changed", () => {
+  const fixture = setup();
+  fs.writeFileSync(fixture.source, "REPAIRED\n");
+
+  assert.throws(
+    () =>
+      finalizeTranscript({
+        transcriptPath: fixture.source,
+        slug: "proj",
+        score: 0,
+        outcome: "unreadable",
+        memoryWritten: [],
+        ...fixture,
+        scopePrefixes: ["proj"],
+      }),
+    /fingerprint changed since review/,
+  );
+  assert.equal(fs.readFileSync(fixture.source, "utf8"), "REPAIRED\n");
+  assert.equal(fs.existsSync(fixture.ledgerFile), false);
+});
+
+test("rejects an unreadable outcome when its source changes during hashing", () => {
+  const fixture = setup();
+  const originalReadSync = fs.readSync;
+  let sourceChanged = false;
+  fs.readSync = ((descriptor, buffer, offset, length, position) => {
+    const bytesRead = originalReadSync(
+      descriptor,
+      buffer,
+      offset,
+      length,
+      position,
+    );
+    if (!sourceChanged) {
+      sourceChanged = true;
+      fs.writeFileSync(fixture.source, "CHANGED\n");
+    }
+    return bytesRead;
+  }) as typeof fs.readSync;
+
+  try {
+    assert.throws(
+      () =>
+        finalizeTranscript({
+          transcriptPath: fixture.source,
+          slug: "proj",
+          score: 0,
+          outcome: "unreadable",
+          memoryWritten: [],
+          ...fixture,
+          scopePrefixes: ["proj"],
+        }),
+      /source changed during fingerprint validation/,
+    );
+    assert.equal(fs.existsSync(fixture.ledgerFile), false);
+  } finally {
+    fs.readSync = originalReadSync;
+  }
+});
+
+test("rejects an unreadable transcript when it cannot be opened for reading", () => {
   const fixture = setup();
   const originalOpenSync = fs.openSync;
   fs.openSync = ((pathname, flags, mode) => {
@@ -814,22 +879,21 @@ test("records an unreadable transcript when it cannot be opened for reading", ()
   }) as typeof fs.openSync;
 
   try {
-    const result = finalizeTranscript({
-      transcriptPath: fixture.source,
-      slug: "proj",
-      score: 0,
-      outcome: "unreadable",
-      memoryWritten: [],
-      ...fixture,
-      scopePrefixes: ["proj"],
-    });
-
-    assert.equal(result.archivePath, undefined);
-    assert.equal(fs.existsSync(fixture.source), true);
-    assert.deepEqual(
-      readLedger(fixture.ledgerFile).map((record) => record.outcome),
-      ["unreadable"],
+    assert.throws(
+      () =>
+        finalizeTranscript({
+          transcriptPath: fixture.source,
+          slug: "proj",
+          score: 0,
+          outcome: "unreadable",
+          memoryWritten: [],
+          ...fixture,
+          scopePrefixes: ["proj"],
+        }),
+      /permission denied/,
     );
+    assert.equal(fs.existsSync(fixture.source), true);
+    assert.equal(fs.existsSync(fixture.ledgerFile), false);
   } finally {
     fs.openSync = originalOpenSync;
   }

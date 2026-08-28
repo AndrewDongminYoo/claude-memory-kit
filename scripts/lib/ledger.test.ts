@@ -75,6 +75,66 @@ test("append is append-only and round-trips", () => {
   assert.deepEqual(minedSessions(f), new Set(["a", "b"]));
 });
 
+test("rejects a ledger leaf symlink without modifying its target", () => {
+  const root = tmpDir();
+  const target = path.join(root, "outside.jsonl");
+  const ledger = path.join(root, "ledger.jsonl");
+  fs.writeFileSync(target, '{"outside":true}');
+  fs.symlinkSync(target, ledger);
+
+  assert.throws(() => appendLedger(ledger, rec({ session_id: "linked" })));
+  assert.equal(fs.readFileSync(target, "utf8"), '{"outside":true}');
+});
+
+test("rejects a ledger hard link without modifying its target", () => {
+  const root = tmpDir();
+  const target = path.join(root, "outside.jsonl");
+  const ledger = path.join(root, "ledger.jsonl");
+  fs.writeFileSync(target, '{"outside":true}');
+  fs.linkSync(target, ledger);
+
+  assert.throws(() => appendLedger(ledger, rec({ session_id: "linked" })));
+  assert.equal(fs.readFileSync(target, "utf8"), '{"outside":true}');
+});
+
+test("rejects a ledger parent symlink without creating a ledger outside its root", () => {
+  const root = tmpDir();
+  const outside = path.join(root, "outside");
+  const linkedParent = path.join(root, "linked-parent");
+  const ledger = path.join(linkedParent, "ledger.jsonl");
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, linkedParent);
+
+  assert.throws(() => appendLedger(ledger, rec({ session_id: "linked" })));
+  assert.equal(fs.existsSync(path.join(outside, "ledger.jsonl")), false);
+});
+
+test("rejects a ledger symlink during reads", () => {
+  const root = tmpDir();
+  const target = path.join(root, "outside.jsonl");
+  const ledger = path.join(root, "ledger.jsonl");
+  fs.writeFileSync(
+    target,
+    JSON.stringify(rec({ session_id: "outside" })) + "\n",
+  );
+  fs.symlinkSync(target, ledger);
+
+  assert.throws(() => readLedger(ledger));
+});
+
+test("records unreadable outcomes without excluding a later rescore", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  appendLedger(
+    f,
+    rec({
+      session_id: "unreadable",
+      outcome: "unreadable",
+    }),
+  );
+
+  assert.deepEqual([...minedSessions(f)], []);
+});
+
 test("syncs new ledger directories and the new ledger file before returning", () => {
   const f = path.join(tmpDir(), "new-ledger", "l.jsonl");
   const originalFsync = fs.fsyncSync;

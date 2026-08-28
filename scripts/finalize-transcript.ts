@@ -24,15 +24,14 @@ function main(): void {
   const [transcriptPath, slug, scoreInput, outcomeInput, ...remainingArgs] =
     process.argv.slice(2);
   const score = Number(scoreInput);
-  const expectedFingerprint =
-    outcomeInput === "unreadable" ? undefined : remainingArgs.shift();
+  const expectedFingerprint = remainingArgs.shift();
   if (
     !transcriptPath ||
     !slug ||
     !Number.isFinite(score) ||
     !outcomeInput ||
     !outcomes.has(outcomeInput as Outcome) ||
-    (outcomeInput !== "unreadable" && !expectedFingerprint)
+    !expectedFingerprint
   ) {
     process.stderr.write(
       "usage: finalize-transcript <transcript.jsonl> <slug> <score> <outcome> [fingerprint] [memory.md ...]\n",

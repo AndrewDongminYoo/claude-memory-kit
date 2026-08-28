@@ -134,7 +134,8 @@ The skill honours the operator's hard boundary and the wiki work-de-attribution 
 
 ## Error handling
 
-- Corrupt / partial jsonl: the scanner skips unreadable lines and flags the file; a transcript that cannot be parsed is left in place and ledgered `outcome: unreadable`, never archived blindly.
+- Corrupt / partial jsonl: the scanner skips unreadable lines and flags the file; a readable transcript that cannot be parsed is left in place and ledgered `outcome: unreadable` only when its raw-byte fingerprint still matches, never archived blindly; its audit record does not block a later rescore.
+- Access-denied transcript: leave it in place without a ledger event because the scorer cannot provide a reviewed fingerprint.
 - Very large transcripts: summarise-then-mine so context is bounded.
 - Interrupted run: the append-only ledger means the next run resumes from where it stopped; no double-write, no double-archive.
 - The `~/.claude` repo may be modified by the operator in parallel — the skill stages only the specific memory files it writes and never runs a bulk `git add -A` (operator-parallel-git discipline).

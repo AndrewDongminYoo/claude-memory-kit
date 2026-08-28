@@ -65,14 +65,17 @@ The archive operation must enforce all of these requirements:
 - Preserve existing archive files without overwriting them.
 - Allocate a collision suffix through an exclusive destination creation step.
 - Keep the source until the archive payload is complete.
-- Leave malformed transcripts in place with the `unreadable` outcome.
+- Leave malformed transcripts in place with the `unreadable` outcome only after the reviewed raw-byte fingerprint still matches.
 
 ## Ledger contract
 
 The ledger stores immutable JSONL events.
 Each event includes the session id, slug, outcome, score, memory paths, archive state, and archive path when it exists.
+Ledger reads and writes reject symbolic-link directory or file paths.
+Repairs and appends use one verified descriptor for the ledger file.
 
 `minedSessions` treats pending and completed records as excluded from new memory proposals.
+An `unreadable` record is an audit event and does not exclude the source from a later rescore.
 An aborted record releases only the matching attempt.
 `pendingArchives` returns the latest pending record for each attempt.
 The recovery command resolves a pending record only when its source remains in the validated project path or its archive destination already exists.
@@ -85,6 +88,8 @@ A transcript is unreadable when it contains no valid JSONL entries.
 An unreadable transcript is reported separately from a low-score transcript.
 It is not selected for deep reading.
 It is not archived by the finalization workflow.
+Its finalization requires the fingerprint of the raw bytes that the prefilter inspected.
+An unreadable access error has no fingerprint and remains unledgered until a later score can inspect it.
 
 ## Verification contract
 

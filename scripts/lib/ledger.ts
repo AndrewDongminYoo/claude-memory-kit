@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isTranscriptFingerprint } from "./fingerprint.ts";
 
@@ -42,9 +43,93 @@ interface LedgerEvent {
   record: LedgerRecord;
 }
 
+function sameFile(left: fs.Stats, right: fs.Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function assertSafeLedgerDirectory(directory: string): void {
+  const absoluteDirectory = path.resolve(directory);
+  const temporaryDirectory = path.resolve(os.tmpdir());
+  const temporaryRelative = path.relative(
+    temporaryDirectory,
+    absoluteDirectory,
+  );
+  const anchor =
+    temporaryRelative === "" ||
+    (!temporaryRelative.startsWith(`..${path.sep}`) &&
+      temporaryRelative !== ".." &&
+      !path.isAbsolute(temporaryRelative))
+      ? temporaryDirectory
+      : path.parse(absoluteDirectory).root;
+  for (let current = absoluteDirectory; ; current = path.dirname(current)) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        if (current === anchor) {
+          return;
+        }
+        continue;
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error("ledger directory path is not a direct directory");
+    }
+    if (current === anchor) {
+      return;
+    }
+  }
+}
+
+function assertSafeLedgerFile(file: string, descriptor: number): void {
+  const fileStat = fs.lstatSync(file);
+  const openedStat = fs.fstatSync(descriptor);
+  if (
+    fileStat.isSymbolicLink() ||
+    !fileStat.isFile() ||
+    !openedStat.isFile() ||
+    openedStat.nlink !== 1 ||
+    !sameFile(fileStat, openedStat)
+  ) {
+    throw new Error("ledger file changed after it was opened");
+  }
+}
+
+function openLedgerForRead(file: string): number | undefined {
+  const ledgerDirectory = path.dirname(file);
+  assertSafeLedgerDirectory(ledgerDirectory);
+  try {
+    const descriptor = fs.openSync(
+      file,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+    try {
+      assertSafeLedgerDirectory(ledgerDirectory);
+      assertSafeLedgerFile(file, descriptor);
+      return descriptor;
+    } catch (error) {
+      fs.closeSync(descriptor);
+      throw error;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function readLedgerEvents(file: string): LedgerEvent[] {
-  if (!fs.existsSync(file)) return [];
-  const contents = fs.readFileSync(file, "utf8");
+  const descriptor = openLedgerForRead(file);
+  if (descriptor === undefined) return [];
+  let contents: string;
+  try {
+    contents = fs.readFileSync(descriptor, "utf8");
+  } finally {
+    fs.closeSync(descriptor);
+  }
   const lines = contents.split("\n");
   return lines.flatMap((line, lineIndex) => {
     if (line.trim().length === 0) {
@@ -87,7 +172,9 @@ export function minedSessions(file: string): Set<string> {
   const pending = new Map<string, Set<string>>();
   for (const { record } of readLedgerEvents(file)) {
     if (!record.archive_state) {
-      completed.add(record.session_id);
+      if (record.outcome !== "unreadable") {
+        completed.add(record.session_id);
+      }
       continue;
     }
     const key = archiveAttemptKey(record);
@@ -125,11 +212,10 @@ function syncDirectory(pathname: string): void {
   }
 }
 
-function repairUnterminatedTrailingEvent(file: string): void {
-  if (!fs.existsSync(file)) {
-    return;
-  }
-  const contents = fs.readFileSync(file, "utf8");
+function repairUnterminatedTrailingEvent(
+  descriptor: number,
+  contents: string,
+): void {
   if (contents.endsWith("\n")) {
     return;
   }
@@ -139,9 +225,9 @@ function repairUnterminatedTrailingEvent(file: string): void {
     if (trailingEvent.trim().length > 0) {
       JSON.parse(trailingEvent);
     }
-    fs.appendFileSync(file, "\n");
+    fs.writeFileSync(descriptor, "\n");
   } catch {
-    fs.truncateSync(file, lineStart);
+    fs.ftruncateSync(descriptor, lineStart);
   }
 }
 
@@ -169,21 +255,36 @@ function syncCreatedDirectoryEntries(
 /** Append one record. Append-only keeps runs resumable and idempotent. */
 export function appendLedger(file: string, rec: LedgerRecord): void {
   const ledgerDirectory = path.dirname(file);
+  assertSafeLedgerDirectory(ledgerDirectory);
   const created = fs.mkdirSync(ledgerDirectory, {
     recursive: true,
     mode: 0o700,
   });
+  assertSafeLedgerDirectory(ledgerDirectory);
   if (created) {
     syncCreatedDirectoryEntries(created, ledgerDirectory);
   }
-  repairUnterminatedTrailingEvent(file);
-  const descriptor = fs.openSync(file, "a", 0o600);
+  const descriptor = fs.openSync(
+    file,
+    fs.constants.O_RDWR |
+      fs.constants.O_APPEND |
+      fs.constants.O_CREAT |
+      fs.constants.O_NOFOLLOW,
+    0o600,
+  );
   try {
+    assertSafeLedgerDirectory(ledgerDirectory);
+    assertSafeLedgerFile(file, descriptor);
+    repairUnterminatedTrailingEvent(
+      descriptor,
+      fs.readFileSync(descriptor, "utf8"),
+    );
     fs.writeFileSync(descriptor, JSON.stringify(rec) + "\n");
     fs.fsyncSync(descriptor);
   } finally {
     fs.closeSync(descriptor);
   }
+  assertSafeLedgerDirectory(ledgerDirectory);
   syncDirectory(ledgerDirectory);
 }
 
