@@ -1,7 +1,10 @@
 # Design — stale-transcript memory mining (`mine-stale-transcripts`)
 
+> Historical design record from 2026-07-26.
+> The current release contract is [the minimum safe release design](2026-08-27-minimum-safe-release-design.md).
+
 Date: 2026-07-26
-Status: proposed (awaiting operator review)
+Status: historical planning record
 Slice: #4 of the claude-memory-kit suite (see `docs/notes/2026-07-26-suite-decomposition.md`)
 
 ## Problem

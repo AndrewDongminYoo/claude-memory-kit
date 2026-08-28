@@ -1,7 +1,10 @@
 # Implementation plan — `mine-stale-transcripts` (slice #4)
 
+> Historical implementation record from 2026-07-26.
+> The active implementation plan is [the minimum safe release plan](2026-08-27-minimum-safe-release-plan.md).
+
 Date: 2026-07-26
-Status: in progress — Phases 0–4 built and tested; Phases 5–6 gated on real cold data
+Status: historical planning record
 Design: `docs/specs/2026-07-26-stale-transcript-memory-mining-design.md`
 
 ## Progress (2026-07-26)
