@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { archiveTranscript } from "./archive.js";
 import { appendLedger, appendCompletedArchive, appendPendingArchive, pendingArchives, } from "./ledger.js";
-import { assertDirectTranscriptPath, assertSafeTranscriptFile, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, } from "./scope.js";
+import { assertDirectTranscriptPath, assertSafeTranscriptFile, assertSafeTranscriptPath, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, } from "./scope.js";
 function processedAt(now) {
     return new Date(now ?? Date.now()).toISOString();
 }
@@ -25,12 +25,13 @@ function ledgerRecord(options, archivePath) {
 /** Records unreadable input or finalizes an archivable transcript. */
 export function finalizeTranscript(options) {
     assertSlugInScope(options.slug, options.scopePrefixes);
-    assertSafeTranscriptFile(options.transcriptPath, options.slug, options.projectsDir);
     const pending = ledgerRecord(options);
     if (options.outcome === "unreadable") {
+        assertSafeTranscriptPath(options.transcriptPath, options.slug, options.projectsDir);
         appendLedger(options.ledgerFile, pending);
         return {};
     }
+    assertSafeTranscriptFile(options.transcriptPath, options.slug, options.projectsDir);
     appendPendingArchive(options.ledgerFile, pending);
     const archivePath = archiveTranscript({
         transcriptPath: options.transcriptPath,

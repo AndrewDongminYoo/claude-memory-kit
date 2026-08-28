@@ -291,3 +291,37 @@ test("records an unreadable transcript without archiving it", () => {
     [{ outcome: "unreadable", archiveState: undefined }],
   );
 });
+
+test("records an unreadable transcript when it cannot be opened for reading", () => {
+  const fixture = setup();
+  const originalOpenSync = fs.openSync;
+  fs.openSync = ((pathname, flags, mode) => {
+    if (pathname === fixture.source) {
+      const error = new Error("permission denied");
+      (error as NodeJS.ErrnoException).code = "EACCES";
+      throw error;
+    }
+    return originalOpenSync(pathname, flags, mode);
+  }) as typeof fs.openSync;
+
+  try {
+    const result = finalizeTranscript({
+      transcriptPath: fixture.source,
+      slug: "proj",
+      score: 0,
+      outcome: "unreadable",
+      memoryWritten: [],
+      ...fixture,
+      scopePrefixes: ["proj"],
+    });
+
+    assert.equal(result.archivePath, undefined);
+    assert.equal(fs.existsSync(fixture.source), true);
+    assert.deepEqual(
+      readLedger(fixture.ledgerFile).map((record) => record.outcome),
+      ["unreadable"],
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+  }
+});

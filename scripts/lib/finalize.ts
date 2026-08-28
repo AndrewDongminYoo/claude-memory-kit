@@ -12,6 +12,7 @@ import {
 import {
   assertDirectTranscriptPath,
   assertSafeTranscriptFile,
+  assertSafeTranscriptPath,
   assertSlugInScope,
   isSingleSegmentSlug,
   isSlugInScope,
@@ -74,16 +75,21 @@ export function finalizeTranscript(options: FinalizeOptions): {
   archivePath?: string;
 } {
   assertSlugInScope(options.slug, options.scopePrefixes);
+  const pending = ledgerRecord(options);
+  if (options.outcome === "unreadable") {
+    assertSafeTranscriptPath(
+      options.transcriptPath,
+      options.slug,
+      options.projectsDir,
+    );
+    appendLedger(options.ledgerFile, pending);
+    return {};
+  }
   assertSafeTranscriptFile(
     options.transcriptPath,
     options.slug,
     options.projectsDir,
   );
-  const pending = ledgerRecord(options);
-  if (options.outcome === "unreadable") {
-    appendLedger(options.ledgerFile, pending);
-    return {};
-  }
   appendPendingArchive(options.ledgerFile, pending);
   const archivePath = archiveTranscript({
     transcriptPath: options.transcriptPath,

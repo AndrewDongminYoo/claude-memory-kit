@@ -88,6 +88,10 @@ function assertCurrentSafeTranscriptPath(transcriptPath, slug, configuredProject
     }
     return projectsStat;
 }
+/** Reject an unsafe transcript path without requiring the file to be readable. */
+export function assertSafeTranscriptPath(transcriptPath, slug, configuredProjectsDir) {
+    assertCurrentSafeTranscriptPath(transcriptPath, slug, configuredProjectsDir);
+}
 /** Open a direct transcript without following a replacement symlink. */
 export function openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir) {
     const candidate = path.resolve(transcriptPath);
