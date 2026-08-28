@@ -43,11 +43,11 @@ jobs:
       - name: Type-check
         run: pnpm run typecheck
 
-      - name: Test
-        run: pnpm test
-
       - name: Build distribution
         run: pnpm build
+
+      - name: Test
+        run: pnpm test
 
       - name: Verify plugin distribution
         run: pnpm verify:plugin

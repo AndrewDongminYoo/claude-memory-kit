@@ -88,6 +88,11 @@ test("CI builds and verifies the distributable plugin", () => {
   const workflow = readText(".github/workflows/ci.yml");
 
   assert.match(workflow, /- name: Build distribution\s+run: pnpm build/);
+  assert.ok(
+    workflow.indexOf("- name: Build distribution") <
+      workflow.indexOf("- name: Test"),
+    "CI must build the distribution before tests parse the built entry points",
+  );
   assert.match(
     workflow,
     /- name: Verify plugin distribution\s+run: pnpm verify:plugin/,
