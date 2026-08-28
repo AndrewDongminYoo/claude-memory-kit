@@ -143,7 +143,7 @@ function copyFromDescriptor(source: number, destination: string): void {
 function syncFile(pathname: string): void {
   const descriptor = fs.openSync(
     pathname,
-    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW,
   );
   try {
     fs.fsyncSync(descriptor);

@@ -98,7 +98,7 @@ function copyFromDescriptor(source, destination) {
     }
 }
 function syncFile(pathname) {
-    const descriptor = fs.openSync(pathname, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const descriptor = fs.openSync(pathname, fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW);
     try {
         fs.fsyncSync(descriptor);
     }

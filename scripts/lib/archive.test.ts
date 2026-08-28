@@ -75,6 +75,50 @@ test("archives on Windows when directory fsync is unavailable", () => {
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
 });
 
+test("uses a writable archive descriptor for Windows file sync", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const originalOpenSync = fs.openSync;
+  const originalFsyncSync = fs.fsyncSync;
+  const flagsByDescriptor = new Map<number, string | number>();
+  const pathsByDescriptor = new Map<number, string>();
+
+  fs.openSync = ((pathname, flags, mode) => {
+    const descriptor = originalOpenSync(pathname, flags, mode);
+    flagsByDescriptor.set(descriptor, flags);
+    pathsByDescriptor.set(descriptor, path.resolve(pathname.toString()));
+    return descriptor;
+  }) as typeof fs.openSync;
+  fs.fsyncSync = ((descriptor: number) => {
+    const flags = flagsByDescriptor.get(descriptor);
+    if (
+      typeof flags === "number" &&
+      pathsByDescriptor.get(descriptor) ===
+        path.join(archiveDir, "proj", "session.jsonl") &&
+      (flags & fs.constants.O_WRONLY) === 0 &&
+      (flags & fs.constants.O_RDWR) === 0
+    ) {
+      throw new Error("Windows file sync requires a writable descriptor");
+    }
+    return originalFsyncSync(descriptor);
+  }) as typeof fs.fsyncSync;
+
+  try {
+    const destination = archiveTranscript({
+      transcriptPath: src,
+      slug: "proj",
+      projectsDir: path.join(root, "projects"),
+      archiveDir,
+    });
+
+    assert.equal(fs.existsSync(src), false, "source should be archived");
+    assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.fsyncSync = originalFsyncSync;
+  }
+});
+
 test("tolerates an archive slug directory created concurrently", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
