@@ -95,6 +95,19 @@ test("CI builds and verifies the distributable plugin", () => {
   );
   assert.match(
     workflow,
+    /- name: Check committed distribution\s+run: git diff --exit-code -- dist/,
+  );
+  assert.ok(
+    workflow.indexOf("- name: Build distribution") <
+      workflow.indexOf("- name: Check committed distribution") &&
+      workflow.indexOf("- name: Check committed distribution") <
+        workflow.indexOf("- name: Test") &&
+      workflow.indexOf("- name: Test") <
+        workflow.indexOf("- name: Verify plugin distribution"),
+    "CI must reject stale committed distribution files before testing",
+  );
+  assert.match(
+    workflow,
     /- name: Verify plugin distribution\s+run: pnpm verify:plugin/,
   );
 });

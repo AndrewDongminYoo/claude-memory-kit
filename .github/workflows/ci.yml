@@ -46,6 +46,9 @@ jobs:
       - name: Build distribution
         run: pnpm build
 
+      - name: Check committed distribution
+        run: git diff --exit-code -- dist
+
       - name: Test
         run: pnpm test
 
