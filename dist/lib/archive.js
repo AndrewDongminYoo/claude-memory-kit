@@ -118,6 +118,10 @@ function syncDirectory(pathname) {
         fs.closeSync(descriptor);
     }
 }
+function removeSource(source, projectSlugDir) {
+    fs.unlinkSync(source);
+    syncDirectory(projectSlugDir);
+}
 function assertResolvedDirectChild(root, child, label) {
     const resolvedRoot = fs.realpathSync(root);
     const resolvedChild = fs.realpathSync(child);
@@ -214,7 +218,7 @@ export function archiveTranscript(opts) {
                 if (!sameFile(existingStat, assertFile(existingDestination, "existing archive"))) {
                     throw new Error("existing archive changed during archiving");
                 }
-                fs.unlinkSync(source);
+                removeSource(source, projectSlugDir);
                 return existingDestination;
             }
             finally {
@@ -235,7 +239,7 @@ export function archiveTranscript(opts) {
             if (!sameFile(sourceStat, assertFile(source, "transcript source"))) {
                 throw new Error("source changed during archiving");
             }
-            fs.unlinkSync(source);
+            removeSource(source, projectSlugDir);
             return destination;
         }
         finally {

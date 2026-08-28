@@ -167,6 +167,11 @@ function syncDirectory(pathname: string): void {
   }
 }
 
+function removeSource(source: string, projectSlugDir: string): void {
+  fs.unlinkSync(source);
+  syncDirectory(projectSlugDir);
+}
+
 function assertResolvedDirectChild(
   root: string,
   child: string,
@@ -321,7 +326,7 @@ export function archiveTranscript(opts: ArchiveOptions): string {
         ) {
           throw new Error("existing archive changed during archiving");
         }
-        fs.unlinkSync(source);
+        removeSource(source, projectSlugDir);
         return existingDestination;
       } finally {
         fs.closeSync(existingDescriptor);
@@ -363,7 +368,7 @@ export function archiveTranscript(opts: ArchiveOptions): string {
       if (!sameFile(sourceStat, assertFile(source, "transcript source"))) {
         throw new Error("source changed during archiving");
       }
-      fs.unlinkSync(source);
+      removeSource(source, projectSlugDir);
       return destination;
     } finally {
       fs.rmSync(temporaryDir, { recursive: true, force: true });

@@ -171,6 +171,60 @@ test(
   },
 );
 
+test(
+  "syncs the source directory after source removal",
+  { skip: process.platform === "win32" },
+  () => {
+    const { root, src } = setup();
+    const projectSlugDir = path.dirname(src);
+    const archiveDir = path.join(root, ".transcript-archive");
+    const directoryDescriptors = new Map<number, string>();
+    const originalOpenSync = fs.openSync;
+    const originalFsyncSync = fs.fsyncSync;
+    const originalUnlinkSync = fs.unlinkSync;
+    let sourceUnlinked = false;
+    let sourceDirectorySynced = false;
+
+    fs.openSync = ((pathname, flags, mode) => {
+      const descriptor = originalOpenSync(pathname, flags, mode);
+      if (
+        typeof flags === "number" &&
+        (flags & fs.constants.O_DIRECTORY) !== 0
+      ) {
+        directoryDescriptors.set(descriptor, path.resolve(pathname.toString()));
+      }
+      return descriptor;
+    }) as typeof fs.openSync;
+    fs.fsyncSync = ((descriptor: number) => {
+      if (directoryDescriptors.get(descriptor) === projectSlugDir) {
+        assert.equal(sourceUnlinked, true);
+        sourceDirectorySynced = true;
+      }
+      return originalFsyncSync(descriptor);
+    }) as typeof fs.fsyncSync;
+    fs.unlinkSync = ((pathname) => {
+      const result = originalUnlinkSync(pathname);
+      if (pathname === src) sourceUnlinked = true;
+      return result;
+    }) as typeof fs.unlinkSync;
+
+    try {
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir,
+      });
+
+      assert.equal(sourceDirectorySynced, true);
+    } finally {
+      fs.openSync = originalOpenSync;
+      fs.fsyncSync = originalFsyncSync;
+      fs.unlinkSync = originalUnlinkSync;
+    }
+  },
+);
+
 test("collision gets a numeric suffix, never overwrites", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
