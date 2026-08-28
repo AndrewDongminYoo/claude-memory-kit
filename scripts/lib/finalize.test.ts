@@ -204,6 +204,106 @@ test("recovery completes a pending record when its recorded archive exists", () 
   );
 });
 
+test("recovery rejects a recorded archive below a symlinked archive root", () => {
+  const fixture = setup();
+  const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");
+  const outsideRoot = path.join(fixture.root, "outside-archive");
+  fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+  fs.writeFileSync(archivePath, "PAYLOAD\n");
+  fs.rmSync(fixture.source);
+  fs.renameSync(fixture.archiveDir, outsideRoot);
+  fs.symlinkSync(outsideRoot, fixture.archiveDir);
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "proposed-rejected",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    archive_path: archivePath,
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 0);
+  assert.equal(result.unresolved.length, 1);
+  assert.equal(readLedger(fixture.ledgerFile).at(-1)?.archive_state, "pending");
+});
+
+test("recovery keeps a duplicate source when the archive root is symlinked", () => {
+  const fixture = setup();
+  const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");
+  const outsideRoot = path.join(fixture.root, "outside-archive");
+  fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+  fs.writeFileSync(archivePath, "PAYLOAD\n");
+  fs.renameSync(fixture.archiveDir, outsideRoot);
+  fs.symlinkSync(outsideRoot, fixture.archiveDir);
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "proposed-rejected",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    archive_path: archivePath,
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 0);
+  assert.equal(result.unresolved.length, 1);
+  assert.equal(fs.existsSync(fixture.source), true);
+  assert.equal(readLedger(fixture.ledgerFile).at(-1)?.archive_state, "pending");
+});
+
+test("recovery rejects a recorded archive below a symlinked archive slug", () => {
+  const fixture = setup();
+  const archiveSlugDir = path.join(fixture.archiveDir, "proj");
+  const archivePath = path.join(archiveSlugDir, "session.jsonl");
+  const outsideSlugDir = path.join(fixture.root, "outside-slug");
+  fs.mkdirSync(outsideSlugDir, { recursive: true });
+  fs.writeFileSync(path.join(outsideSlugDir, "session.jsonl"), "PAYLOAD\n");
+  fs.mkdirSync(fixture.archiveDir, { recursive: true });
+  fs.symlinkSync(outsideSlugDir, archiveSlugDir);
+  fs.rmSync(fixture.source);
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "proposed-rejected",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    archive_path: archivePath,
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 0);
+  assert.equal(result.unresolved.length, 1);
+  assert.equal(readLedger(fixture.ledgerFile).at(-1)?.archive_state, "pending");
+});
+
 test("recovery reuses a recorded archive before removing a duplicate source", () => {
   const fixture = setup();
   const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");

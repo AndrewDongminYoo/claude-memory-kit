@@ -124,13 +124,29 @@ function isRecordedArchiveFile(
   if (path.dirname(candidate) !== archiveSlugDir || !fs.existsSync(candidate)) {
     return false;
   }
-  const stat = fs.lstatSync(candidate);
-  if (stat.isSymbolicLink() || !stat.isFile()) {
+  try {
+    const rootStat = fs.lstatSync(archiveRoot);
+    const slugStat = fs.lstatSync(archiveSlugDir);
+    const archiveStat = fs.lstatSync(candidate);
+    if (
+      rootStat.isSymbolicLink() ||
+      !rootStat.isDirectory() ||
+      slugStat.isSymbolicLink() ||
+      !slugStat.isDirectory() ||
+      archiveStat.isSymbolicLink() ||
+      !archiveStat.isFile()
+    ) {
+      return false;
+    }
+    const resolvedRoot = fs.realpathSync(archiveRoot);
+    const resolvedSlugDir = fs.realpathSync(archiveSlugDir);
+    return (
+      path.dirname(resolvedSlugDir) === resolvedRoot &&
+      path.dirname(fs.realpathSync(candidate)) === resolvedSlugDir
+    );
+  } catch {
     return false;
   }
-  return (
-    path.dirname(fs.realpathSync(candidate)) === fs.realpathSync(archiveSlugDir)
-  );
 }
 
 function completionRecord(
