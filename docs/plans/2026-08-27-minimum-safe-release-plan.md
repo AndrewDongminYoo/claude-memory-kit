@@ -168,7 +168,8 @@ interface FinalizeOptions {
   transcriptPath: string;
   slug: string;
   score: number;
-  outcome: "memory-written" | "proposed-rejected" | "skipped-low-score";
+  outcome:
+    "memory-written" | "proposed-rejected" | "skipped-low-score" | "unreadable";
   memoryWritten: string[];
   projectsDir: string;
   archiveDir: string;
@@ -206,7 +207,7 @@ Expected: FAIL because archive state and recovery do not exist.
 
 Add `pending` and `archived` archive states without modifying old ledger entries.
 Write a pending event before the archive operation.
-Write a destination-bound pending event after `archiveTranscript` returns a contained destination.
+Write a destination-bound pending event from `onDestinationReady` before `archiveTranscript` removes the source.
 Write an archived event only after that pending event exists.
 Make recovery archive a still-present validated source or append completion when the recorded destination already exists.
 Report unresolved pending records without modifying them.
@@ -291,7 +292,7 @@ Expected: PASS.
 ```typescript
 test("runs compiled scan and score commands from a copy without node_modules", () => {
   const result = verifyPluginCopy(pluginRoot);
-  assert.equal(result.runtimeChecks, 2);
+  assert.equal(result.runtimeChecks, 9);
 });
 ```
 
@@ -365,24 +366,24 @@ Expected: PASS.
 - Modify: `.github/workflows/ci.yml`
 - Test: all `scripts/**/*.test.ts`
 
-- [ ] **Step 1: Run the full local release gate.**
+- [x] **Step 1: Run the full local release gate.**
 
 Run: `pnpm build && pnpm run typecheck && pnpm run format:check && pnpm test && pnpm verify:plugin && claude plugin validate --strict .`
 
 Expected: PASS.
 
-- [ ] **Step 2: Add the equivalent build and plugin verification commands to CI.**
+- [x] **Step 2: Add the equivalent build and plugin verification commands to CI.**
 
 Run: `pnpm build && pnpm verify:plugin`
 
 Expected: PASS before adding the workflow steps.
 
-- [ ] **Step 3: Run a temporary fixture dry-run.**
+- [x] **Step 3: Run a temporary fixture dry-run.**
 
-Run: `CLAUDE_CONFIG_DIR=<temporary-fixture-root> node dist/scan-cold.js`
+Run: `CMK_SCOPE_SLUG_PREFIXES=<approved-slug-prefix> CLAUDE_CONFIG_DIR=<temporary-fixture-root> node dist/scan-cold.js`
 
 Expected: The command lists only old, un-mined, main-session transcripts and changes no fixture files.
 
-- [ ] **Step 4: Stop before a real home-directory dry-run.**
+- [x] **Step 4: Stop before a real home-directory dry-run.**
 
 Ask the operator for separate approval before reading or changing the real `~/.claude` corpus.
