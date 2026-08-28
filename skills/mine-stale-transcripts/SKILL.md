@@ -1,138 +1,131 @@
 ---
 name: mine-stale-transcripts
-description: Use to review cold Claude session transcripts (~/.claude/projects/<slug>/*.jsonl), capture memory-worthy value into native memory with a confirm gate, then soft-archive the processed transcripts. Knowledge-preservation first; nothing is hard-deleted; every memory write is confirmed.
+description: Use to manually review cold Claude Code transcripts before retention, propose native Markdown memory with evidence, require approval, then safely preserve the processed transcript.
 ---
 
 # Mine stale transcripts
 
-Review cold, un-mined session transcripts, propose memory-worthy entries for the
-operator to confirm, write only the approved ones into native memory, then
-soft-archive the processed transcripts.
+Review cold main-session transcripts before retention removes them.
+Promote only approved, source-backed lessons to native Markdown memory.
+Then use the finalizer to preserve the processed transcript.
 
-**Primary goal is knowledge preservation, not disk reclamation.** Default is a
-dry-run: score and propose, but write and archive nothing until a batch is
-confirmed.
+This workflow is manual.
+Do not write memory or finalize an archive until the operator approves the specific batch action.
 
-Helper scripts live under `${CLAUDE_PLUGIN_ROOT}/scripts` and are run with `tsx`.
-They are deterministic, never call an LLM, and never delete bytes; the judgment
-and the confirm loop are yours.
+The installed plugin requires Node.js 22.23.2 or later.
+Run only the compiled helper files in `${CLAUDE_PLUGIN_ROOT}/dist`.
+Do not require `tsx` or plugin-local `node_modules` at runtime.
 
-## When to use
-
-- Periodically, to distil value out of old sessions before they age out of use.
-- When `~/.claude/projects/` has grown large and you want the durable knowledge
-  captured before reclaiming space.
-
-Do not use it to mine sub-agent or workflow child transcripts — only main-session
-transcripts are in scope (the scanner already enforces this).
-
-## Pipeline
-
-### 1. Scan for candidates (read-only)
+Before every helper command, define the approved project-slug prefixes for this batch.
 
 ```bash
-tsx "${CLAUDE_PLUGIN_ROOT}/scripts/scan-cold.ts"    # COLD_DAYS=14 default
+export CMK_SCOPE_SLUG_PREFIXES="<approved-slug-prefix-1>,<approved-slug-prefix-2>"
 ```
 
-Emits cold (age >= `COLD_DAYS`), un-mined (absent from the ledger) main-session
-transcripts as JSON, oldest first.
+Every helper fails closed when `CMK_SCOPE_SLUG_PREFIXES` is absent or empty.
+Do not use a broad prefix that can include another account.
+The scanner skips an out-of-scope slug before it reads a transcript file.
 
-Zero candidates can be normal, but it is also what a **retention collision**
-looks like: if the harness deletes transcripts at `cleanupPeriodDays` before
-`COLD_DAYS` elapses, the mining window is empty by construction and no amount of
-running the skill will ever find anything. On zero the scanner prints the corpus
-age span for exactly this reason — **read it before reporting.** When the oldest
-transcript sits at roughly `COLD_DAYS`, say so and name the fix (raise
-`cleanupPeriodDays`, or lower `COLD_DAYS`); do not report it as "nothing to
-mine".
+## 1. Recover first
 
-### 2. Prefilter score (read-only, no LLM)
-
-Score the candidate paths; only the `selected` ones earn an LLM read:
+Before a new scan, recover any interrupted finalization.
 
 ```bash
-tsx "${CLAUDE_PLUGIN_ROOT}/scripts/score-prefilter.ts" <path1> <path2> ...
+node "${CLAUDE_PLUGIN_ROOT}/dist/recover-pending-archives.js"
 ```
 
-Each line reports `score`, `turns`, the matched `signals` (so you and the
-operator can see _why_ a transcript surfaced), and two flags:
+Report unresolved records.
+Do not recreate memory proposals or write memory during recovery.
 
-- `above` — cleared `SCORE_MIN`.
-- `selected` — cleared `SCORE_MIN` **and** survived the per-project cap
-  (`MAX_PER_PROJECT`, default 5). This is the deep-read set.
+## 2. Scan candidates
 
-The cap exists because the score saturates on long sessions and cannot rank
-within a project: on a real corpus one project supplied 80% of the
-above-threshold transcripts, and raising `SCORE_MIN` made that worse (98%), not
-better. Do not "fix" a lopsided batch by raising the threshold.
-
-Candidates that are not `selected` are **not** read; they are ledgered
-`skipped-low-score` and archived in step 6.
-
-### 3. Deep read and propose (LLM, selected only)
-
-For each selected transcript, read it (summarise-then-mine if it is very
-large so one session cannot blow the context budget) and propose zero or more
-memory entries. For every proposed fact:
-
-- **Source-verify it (SVOP).** It must trace to specific transcript turns; cite
-  them. Never invent dates, ids, or proper nouns not present in the session.
-- **Apply the native-memory bar.** Keep only durable, non-obvious facts. Skip
-  what the repo, git history, or CLAUDE.md already records, and skip
-  conversation-local detail.
-- **Classify scope** per `~/.claude/rules/memory-scope.md` (project vs global)
-  and **type** (`user` / `feedback` / `project` / `reference`).
-- **De-duplicate.** Check the project's existing `MEMORY.md` and memory files
-  (and, for global facts, `~/.claude/rules/`). If an entry already covers it,
-  propose an _update_ to that file, not a duplicate.
-- **Respect the account boundary.** Derive the account from the slug. For a
-  work-scope session, never carry concrete work identifiers (employer, ticket
-  ids) into personal memory, and never write sensitive employment content to a
-  shareable artifact. If the account is ambiguous, ask — do not infer.
-
-Format each proposal as a native memory file body with correct frontmatter,
-ready to write verbatim on approval.
-
-### 4. Batch confirm
-
-Present all proposals grouped by project. For each show: the proposed memory
-body, its scope/type, the transcript evidence, and whether it is a new file or an
-update to an existing one. The operator approves, edits, or rejects each.
-
-Only approved entries proceed. In a dry-run, stop here and report — write and
-archive nothing.
-
-### 5. Write approved memory
-
-For each approved entry, write the memory file under
-`~/.claude/projects/<slug>/memory/` and add its one-line pointer to that
-project's `MEMORY.md`. Stage only the specific files you write; never
-`git add -A` the `~/.claude` repo (it may have parallel operator edits).
-
-### 6. Ledger and soft-archive
-
-For every processed transcript (memory-written, proposed-rejected, or
-skipped-low-score), append a ledger record, then soft-archive it:
+Run the read-only scanner.
 
 ```bash
-tsx "${CLAUDE_PLUGIN_ROOT}/scripts/archive-transcript.ts" <transcript.jsonl> <slug>
+node "${CLAUDE_PLUGIN_ROOT}/dist/scan-cold.js"
 ```
 
-Archiving moves the transcript to `~/.claude/.transcript-archive/<slug>/`
-(recoverable). A transcript that fails to parse is left in place, ledgered
-`unreadable`, and never archived blindly.
+The scanner lists only configured-scope direct `projects/<slug>/<session>.jsonl` main-session transcripts.
+It excludes mined sessions and symbolic links.
+The default `COLD_DAYS` value is 14.
 
-### 7. Report
+If the scanner finds no candidates, read its age diagnostic before reporting an empty backlog.
+Retention can remove transcripts before they become cold when `COLD_DAYS` is too high.
 
-Summarise: candidates scanned, above-threshold, selected for deep read, memory
-written (with paths), skipped, and bytes moved to archive. Note that the archive is recoverable and
-that pruning it is a later, separate decision.
+## 3. Prefilter without an LLM
+
+Pass scanner candidate paths to the read-only prefilter.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/score-prefilter.js" <path1> <path2>
+```
+
+Read only rows marked `selected` for the deep-read step.
+A finalizable row, including a readable malformed row marked `unreadable`, includes a SHA-256 `fingerprint`.
+Carry that value through the review and approval step.
+Treat a row marked `unreadable` as a preservation problem, not low-score noise.
+Do not deep-read or archive an unreadable transcript.
+If an unreadable row has no fingerprint, it could not be read.
+Leave it in place and do not write a ledger event until a later score can provide a fingerprint.
+Treat a row marked `missing` as a non-finalizable race result.
+Do not deep-read, archive, or ledger it.
+
+After the operator agrees to record the result, preserve its source file and write only its ledger outcome.
+The ledger outcome is an audit record and leaves the unreadable transcript eligible for a later rescore.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> 0 unreadable <fingerprint>
+```
+
+## 4. Deep-read and propose memory
+
+For each selected transcript, propose only durable and non-obvious facts.
+Every proposed fact must cite the source transcript turns that support it.
+Check existing project memory before proposing a duplicate.
+
+Classify the proposed entry as project or global memory according to the native-memory rules.
+Keep work and personal account data separate.
+If the scope is ambiguous, ask the operator instead of inferring it.
+
+Present proposals grouped by project.
+Show the proposed Markdown body, memory destination, and transcript evidence for each proposal.
+
+## 5. Require approval and write memory
+
+Wait for explicit approval, edits, or rejection of every proposal.
+Write only approved native Markdown memory entries.
+Update the matching `MEMORY.md` index entry when the native format requires it.
+
+Stage only the memory files written for this confirmed batch.
+Do not bulk-stage the Claude configuration repository.
+
+## 6. Finalize the processed transcript
+
+After the approved memory write, or after the operator confirms a rejection or low-score result, run the finalizer once for that transcript.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> <score> <memory-written|proposed-rejected|skipped-low-score> <fingerprint> [memory.md ...]
+```
+
+The finalizer records a pending archive event before it plans the archive destination.
+It records that destination before it publishes or synchronizes the archive payload.
+It then writes a completion event.
+It rejects a source whose bytes no longer match the reviewed `fingerprint`.
+If the archive copy no longer matches the reviewed `fingerprint`, it records an `aborted` attempt and leaves the source for a new score and approval.
+Rescore and obtain approval again when that happens.
+The finalizer retains the source after it archives the reviewed bytes.
+An unchanged retained source stays excluded from a new proposal.
+A retained source with a new fingerprint returns to score and approval.
+If publication cannot be confirmed, recovery retains the destination-bound pending record until it can verify the destination.
+
+Use the recovery command in step 1 if the command stops before completion.
+Do not run the finalizer against a path outside the configured `projects/<slug>/` directory.
 
 ## Hard rules
 
-- **Dry-run by default.** No memory write and no archive until a batch is
-  confirmed.
-- **Never hard-delete a transcript.** Soft-archive only.
-- **Never write memory without confirmation.** No autonomous writes.
-- **Account separation is a hard boundary.** Ask, do not infer, when unsure.
-- **Every proposed fact is source-verified** against the transcript.
+- Do not read, write, or archive files in an ambiguous account scope.
+- Do not run a helper without a non-empty `CMK_SCOPE_SLUG_PREFIXES` value.
+- Do not write memory without explicit operator approval.
+- Do not hard-delete transcripts or archives.
+- Do not treat malformed JSONL as low-score data.
+- Do not bypass a pending archive with a new memory write.

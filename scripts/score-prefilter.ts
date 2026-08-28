@@ -1,10 +1,21 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fingerprintContents } from "./lib/fingerprint.ts";
+import { projectsDir, resolveClaudeRoot } from "./lib/paths.ts";
 import {
+  isUnreadableTranscript,
+  parseMaxPerProject,
   scoreTranscript,
   selectForDeepRead,
-  MAX_PER_PROJECT,
   SCORE_MIN,
 } from "./lib/score.ts";
+import {
+  assertDirectTranscriptPath,
+  assertSlugInScope,
+  isTranscriptPathValidationError,
+  openSafeTranscriptFile,
+  parseScopeSlugPrefixes,
+} from "./lib/scope.ts";
 
 /**
  * CLI: score one or more transcript files (paths as args) with the cheap,
@@ -18,43 +29,136 @@ import {
  */
 interface Row {
   path: string;
+  slug: string;
   score: number;
   turns?: number;
+  unreadable?: boolean;
+  missing?: boolean;
+  fingerprint?: string;
   error?: string;
   [key: string]: unknown;
 }
 
+function transcriptReadErrorCode(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | undefined)?.code;
+}
+
+function isUnreadableTranscriptReadError(error: unknown): boolean {
+  const code = transcriptReadErrorCode(error);
+  return code === "EACCES" || code === "EPERM";
+}
+
+function unreadableRow(
+  transcriptPath: string,
+  slug: string,
+  error: unknown,
+): Row {
+  return {
+    path: transcriptPath,
+    slug,
+    score: 0,
+    unreadable: true,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function missingRow(transcriptPath: string, slug: string, error: unknown): Row {
+  return {
+    path: transcriptPath,
+    slug,
+    score: 0,
+    missing: true,
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
 function main(): void {
-  const paths = process.argv.slice(2).filter((a) => !a.startsWith("--"));
-  if (paths.length === 0) {
+  const scopePrefixes = parseScopeSlugPrefixes();
+  const configuredProjectsDir = projectsDir(resolveClaudeRoot());
+  const transcriptPaths = [
+    ...new Set(
+      process.argv
+        .slice(2)
+        .filter((argument) => !argument.startsWith("--"))
+        .map((argument) => path.resolve(argument)),
+    ),
+  ];
+  if (transcriptPaths.length === 0) {
     process.stderr.write("usage: score-prefilter <transcript.jsonl> ...\n");
     process.exit(2);
   }
-  const cap = Number(process.env.MAX_PER_PROJECT ?? MAX_PER_PROJECT);
-  if (!Number.isFinite(cap)) {
-    throw new Error(`invalid MAX_PER_PROJECT: ${process.env.MAX_PER_PROJECT}`);
-  }
+  const cap = parseMaxPerProject(process.env.MAX_PER_PROJECT);
+  const scopedPaths = transcriptPaths.map((transcriptPath) => {
+    const slug = path.basename(path.dirname(transcriptPath));
+    assertSlugInScope(slug, scopePrefixes);
+    assertDirectTranscriptPath(transcriptPath, slug, configuredProjectsDir);
+    return { transcriptPath, slug };
+  });
 
-  const rows: Row[] = paths.map((path) => {
+  const rows: Row[] = scopedPaths.map(({ transcriptPath, slug }) => {
+    let descriptor: number | undefined;
     try {
-      return { path, ...scoreTranscript(fs.readFileSync(path, "utf8")) };
-    } catch (err) {
-      // An unreadable transcript scores 0 and is reported, never fatal — one
-      // bad file must not sink a 500-file batch.
+      descriptor = openSafeTranscriptFile(
+        transcriptPath,
+        slug,
+        configuredProjectsDir,
+      );
+    } catch (error) {
+      if (isTranscriptPathValidationError(error)) {
+        if (transcriptReadErrorCode(error) === "ENOENT") {
+          return missingRow(transcriptPath, slug, error);
+        }
+        throw error;
+      }
+      if (transcriptReadErrorCode(error) === "ENOENT") {
+        return missingRow(transcriptPath, slug, error);
+      }
+      if (isUnreadableTranscriptReadError(error)) {
+        return unreadableRow(transcriptPath, slug, error);
+      }
+      throw error;
+    }
+    try {
+      const contents = fs.readFileSync(descriptor);
+      const raw = contents.toString("utf8");
+      if (isUnreadableTranscript(raw)) {
+        return {
+          path: transcriptPath,
+          slug,
+          score: 0,
+          unreadable: true,
+          fingerprint: fingerprintContents(contents),
+          error: "no valid JSONL transcript entries",
+        };
+      }
       return {
-        path,
-        score: 0,
-        error: err instanceof Error ? err.message : String(err),
+        path: transcriptPath,
+        slug,
+        fingerprint: fingerprintContents(contents),
+        ...scoreTranscript(raw),
       };
+    } catch (error) {
+      if (transcriptReadErrorCode(error) === "ENOENT") {
+        return missingRow(transcriptPath, slug, error);
+      }
+      if (isUnreadableTranscriptReadError(error)) {
+        return unreadableRow(transcriptPath, slug, error);
+      }
+      throw error;
+    } finally {
+      if (descriptor !== undefined) {
+        fs.closeSync(descriptor);
+      }
     }
   });
 
-  const selected = new Set(selectForDeepRead(rows, cap).map((r) => r.path));
+  const selectedRows = selectForDeepRead(rows, cap);
+  const selected = new Set(selectedRows.map((row) => row.path));
   for (const row of rows) {
     process.stdout.write(
       JSON.stringify({
         ...row,
-        above: row.score >= SCORE_MIN,
+        above: !row.unreadable && row.score >= SCORE_MIN,
         selected: selected.has(row.path),
       }) + "\n",
     );
@@ -64,9 +168,11 @@ function main(): void {
   // what the batch costs. Stubs get their own count because they dominate a
   // real corpus (375 of 583 on the 2026-08-05 run) and explain a low yield
   // that would otherwise read as a broken filter.
-  const above = rows.filter((r) => r.score >= SCORE_MIN).length;
+  const above = rows.filter(
+    (r) => !r.unreadable && r.score >= SCORE_MIN,
+  ).length;
   const stubs = rows.filter((r) => r.turns !== undefined && r.turns < 3).length;
-  const projects = new Set([...selected].map((p) => p.split("/").at(-2))).size;
+  const projects = new Set(selectedRows.map((row) => row.slug)).size;
   process.stderr.write(
     `${rows.length} scored | ${above} above SCORE_MIN=${SCORE_MIN} | ` +
       `${selected.size} selected across ${projects} project(s) ` +

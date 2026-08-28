@@ -1,6 +1,7 @@
 import { resolveClaudeRoot, projectsDir, ledgerPath } from "./lib/paths.ts";
-import { minedSessions } from "./lib/ledger.ts";
+import { archivedSourceFingerprints, minedSessions } from "./lib/ledger.ts";
 import { scanCold } from "./lib/scan.ts";
+import { parseScopeSlugPrefixes } from "./lib/scope.ts";
 
 /**
  * CLI: print cold, un-mined transcript candidates as JSON to stdout.
@@ -19,16 +20,20 @@ import { scanCold } from "./lib/scan.ts";
 const DEFAULT_COLD_DAYS = 14;
 
 function main(): void {
+  const scopePrefixes = parseScopeSlugPrefixes();
   const coldDays = Number(process.env.COLD_DAYS ?? DEFAULT_COLD_DAYS);
   if (!Number.isFinite(coldDays) || coldDays < 0) {
     throw new Error(`invalid COLD_DAYS: ${process.env.COLD_DAYS}`);
   }
   const root = resolveClaudeRoot();
+  const ledger = ledgerPath(root);
   const opts = {
     projectsDir: projectsDir(root),
-    minedSessions: minedSessions(ledgerPath(root)),
+    minedSessions: minedSessions(ledger),
+    minedFingerprints: archivedSourceFingerprints(ledger),
     coldDays,
     now: Date.now(),
+    scopePrefixes,
     useInternalTimestamps: process.env.CMK_MTIME_ONLY !== "1",
   };
   const candidates = scanCold(opts);

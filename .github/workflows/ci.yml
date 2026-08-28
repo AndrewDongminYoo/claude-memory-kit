@@ -43,5 +43,14 @@ jobs:
       - name: Type-check
         run: pnpm run typecheck
 
+      - name: Build distribution
+        run: pnpm build
+
+      - name: Check committed distribution
+        run: git diff --exit-code -- dist
+
       - name: Test
         run: pnpm test
+
+      - name: Verify plugin distribution
+        run: pnpm verify:plugin

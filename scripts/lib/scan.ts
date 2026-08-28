@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fingerprintDescriptor } from "./fingerprint.ts";
+import {
+  isSlugInScope,
+  openSafeTranscriptFile,
+  readSafeTranscriptFile,
+} from "./scope.ts";
 import { ageBasisMs } from "./timestamps.ts";
 
 const DAY_MS = 86_400_000;
@@ -17,14 +23,39 @@ export interface Candidate {
 export interface ScanOptions {
   projectsDir: string;
   minedSessions: Set<string>;
+  minedFingerprints?: ReadonlyMap<string, string>;
   coldDays: number;
   now: number;
+  /** Explicit allowlist applied before transcript directories are read. */
+  scopePrefixes: readonly string[];
   /**
    * When true, derive age from the transcript's internal session timestamp
    * (falling back to mtime) instead of mtime alone. Required for copied /
    * worktree config dirs where mtime was bulk-reset; costs one file read each.
    */
   useInternalTimestamps?: boolean;
+}
+
+function hasChangedMinedSource(
+  transcriptPath: string,
+  slug: string,
+  projectsDir: string,
+  archivedFingerprint: string,
+): boolean {
+  try {
+    const descriptor = openSafeTranscriptFile(
+      transcriptPath,
+      slug,
+      projectsDir,
+    );
+    try {
+      return fingerprintDescriptor(descriptor) !== archivedFingerprint;
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -35,16 +66,29 @@ export interface ScanOptions {
  * the internal session time and mtime (reads the file); otherwise mtime only.
  */
 export function scanCold(opts: ScanOptions): Candidate[] {
-  const { projectsDir, minedSessions, coldDays, now, useInternalTimestamps } =
-    opts;
+  const {
+    projectsDir,
+    minedSessions,
+    minedFingerprints,
+    coldDays,
+    now,
+    scopePrefixes,
+    useInternalTimestamps,
+  } = opts;
   if (!fs.existsSync(projectsDir)) return [];
+  const projectsStat = fs.lstatSync(projectsDir);
+  if (projectsStat.isSymbolicLink()) {
+    throw new Error("projects directory is a symbolic link");
+  }
+  if (!projectsStat.isDirectory()) return [];
 
   const out: Candidate[] = [];
   for (const slug of fs.readdirSync(projectsDir)) {
+    if (!isSlugInScope(slug, scopePrefixes)) continue;
     const dir = path.join(projectsDir, slug);
     let dstat: fs.Stats;
     try {
-      dstat = fs.statSync(dir);
+      dstat = fs.lstatSync(dir);
     } catch {
       continue;
     }
@@ -55,7 +99,7 @@ export function scanCold(opts: ScanOptions): Candidate[] {
       const full = path.join(dir, entry);
       let fstat: fs.Stats;
       try {
-        fstat = fs.statSync(full);
+        fstat = fs.lstatSync(full);
       } catch {
         continue;
       }
@@ -66,7 +110,7 @@ export function scanCold(opts: ScanOptions): Candidate[] {
       if (useInternalTimestamps) {
         let raw: string | null = null;
         try {
-          raw = fs.readFileSync(full, "utf8");
+          raw = readSafeTranscriptFile(full, slug, projectsDir);
         } catch {
           raw = null;
         }
@@ -78,7 +122,14 @@ export function scanCold(opts: ScanOptions): Candidate[] {
       const ageDays = (now - basisMs) / DAY_MS;
       if (ageDays < coldDays) continue; // still warm
       const session_id = entry.slice(0, -".jsonl".length);
-      if (minedSessions.has(session_id)) continue; // already mined
+      const archivedFingerprint = minedFingerprints?.get(session_id);
+      if (
+        minedSessions.has(session_id) &&
+        (!archivedFingerprint ||
+          !hasChangedMinedSource(full, slug, projectsDir, archivedFingerprint))
+      ) {
+        continue;
+      }
 
       out.push({
         session_id,
