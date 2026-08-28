@@ -348,7 +348,7 @@ test("reserves only the collision-safe destination in the ledger callback", () =
   assert.equal(fs.readFileSync(existing, "utf8"), "EXISTING\n");
 });
 
-test("reserves an empty archive destination before publishing its payload", () => {
+test("records an archive destination after publishing its payload", () => {
   const { root, src } = setup();
   let reserved = false;
   let ready = false;
@@ -360,7 +360,7 @@ test("reserves an empty archive destination before publishing its payload", () =
     archiveDir: path.join(root, ".transcript-archive"),
     onDestinationReserved: (destination) => {
       reserved = true;
-      assert.equal(fs.readFileSync(destination, "utf8"), "");
+      assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
       assert.equal(fs.existsSync(src), true);
     },
     onDestinationReady: (destination) => {
@@ -405,31 +405,27 @@ test("keeps the source when final archive sync fails", () => {
   assert.equal(fs.existsSync(src), true, "source must remain in place");
 });
 
-test("removes a published destination when post-publish sync fails", () => {
+test("retains a published destination when post-publish sync fails", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
   const destination = path.join(archiveDir, "proj", "session.jsonl");
   const originalOpenSync = fs.openSync;
+  const originalCloseSync = fs.closeSync;
   const originalFsyncSync = fs.fsyncSync;
-  const descriptors = new Map<
-    number,
-    { pathname: string; flags: string | number }
-  >();
+  const directoryDescriptors = new Map<number, string>();
   fs.openSync = ((pathname, flags, mode) => {
     const descriptor = originalOpenSync(pathname, flags, mode);
-    descriptors.set(descriptor, {
-      pathname: path.resolve(pathname.toString()),
-      flags,
-    });
+    if (typeof flags === "number" && (flags & fs.constants.O_DIRECTORY) !== 0) {
+      directoryDescriptors.set(descriptor, path.resolve(pathname.toString()));
+    }
     return descriptor;
   }) as typeof fs.openSync;
+  fs.closeSync = ((descriptor: number) => {
+    directoryDescriptors.delete(descriptor);
+    return originalCloseSync(descriptor);
+  }) as typeof fs.closeSync;
   fs.fsyncSync = ((descriptor: number) => {
-    const opened = descriptors.get(descriptor);
-    if (
-      opened?.pathname === destination &&
-      typeof opened.flags === "number" &&
-      (opened.flags & fs.constants.O_WRONLY) !== 0
-    ) {
+    if (directoryDescriptors.get(descriptor) === path.dirname(destination)) {
       throw new Error("post-publish sync failed");
     }
     return originalFsyncSync(descriptor);
@@ -448,11 +444,131 @@ test("removes a published destination when post-publish sync fails", () => {
     );
   } finally {
     fs.openSync = originalOpenSync;
+    fs.closeSync = originalCloseSync;
     fs.fsyncSync = originalFsyncSync;
   }
 
   assert.equal(fs.existsSync(src), true);
-  assert.equal(fs.existsSync(destination), false);
+  assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
+});
+
+test("preserves a destination created while publishing", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const destination = path.join(archiveDir, "proj", "session.jsonl");
+  const originalLinkSync = fs.linkSync;
+  let created = false;
+
+  fs.linkSync = ((existingPath, newPath) => {
+    if (path.resolve(newPath.toString()) === destination && !created) {
+      created = true;
+      fs.writeFileSync(destination, "UNRELATED\n");
+    }
+    return originalLinkSync(existingPath, newPath);
+  }) as typeof fs.linkSync;
+
+  let archived = "";
+  try {
+    archived = archiveTranscript({
+      transcriptPath: src,
+      slug: "proj",
+      projectsDir: path.join(root, "projects"),
+      archiveDir,
+    });
+  } finally {
+    fs.linkSync = originalLinkSync;
+  }
+
+  assert.equal(created, true);
+  assert.equal(fs.readFileSync(destination, "utf8"), "UNRELATED\n");
+  assert.equal(archived, path.join(archiveDir, "proj", "session.dup1.jsonl"));
+  assert.equal(fs.readFileSync(archived, "utf8"), "PAYLOAD\n");
+  assert.equal(fs.existsSync(src), false);
+});
+
+test("keeps the source when the staging payload changes while publishing", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const destination = path.join(archiveDir, "proj", "session.jsonl");
+  const originalLinkSync = fs.linkSync;
+  let stagingChanged = false;
+
+  fs.linkSync = ((existingPath, newPath) => {
+    if (!stagingChanged) {
+      stagingChanged = true;
+      fs.unlinkSync(existingPath);
+      fs.writeFileSync(existingPath, "UNRELATED\n");
+    }
+    return originalLinkSync(existingPath, newPath);
+  }) as typeof fs.linkSync;
+
+  try {
+    assert.throws(
+      () =>
+        archiveTranscript({
+          transcriptPath: src,
+          slug: "proj",
+          projectsDir: path.join(root, "projects"),
+          archiveDir,
+        }),
+      /archive destination changed during publishing/,
+    );
+  } finally {
+    fs.linkSync = originalLinkSync;
+  }
+
+  assert.equal(stagingChanged, true);
+  assert.equal(fs.readFileSync(destination, "utf8"), "UNRELATED\n");
+  assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
+});
+
+test("preserves a destination replaced after reservation", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const destination = path.join(archiveDir, "proj", "session.jsonl");
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir,
+        onDestinationReserved: (reserved) => {
+          fs.unlinkSync(reserved);
+          fs.writeFileSync(reserved, "UNRELATED\n");
+        },
+      }),
+    /archive destination changed during publishing/,
+  );
+
+  assert.equal(fs.readFileSync(destination, "utf8"), "UNRELATED\n");
+  assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
+});
+
+test("preserves a destination replaced when the ready callback fails", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const destination = path.join(archiveDir, "proj", "session.jsonl");
+
+  assert.throws(
+    () =>
+      archiveTranscript({
+        transcriptPath: src,
+        slug: "proj",
+        projectsDir: path.join(root, "projects"),
+        archiveDir,
+        onDestinationReady: (ready) => {
+          fs.unlinkSync(ready);
+          fs.writeFileSync(ready, "UNRELATED\n");
+          throw new Error("ready callback failed");
+        },
+      }),
+    /ready callback failed/,
+  );
+
+  assert.equal(fs.readFileSync(destination, "utf8"), "UNRELATED\n");
+  assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
 });
 
 test("keeps the source when its reviewed fingerprint does not match", () => {

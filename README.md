@@ -44,14 +44,19 @@ read-only    read-only         selected     required            agent-owned     
 2. `score-prefilter` selects the highest-value configured-scope transcripts for a deep read and reports malformed JSONL as `unreadable` with a raw-byte fingerprint.
 3. The agent proposes source-backed native Markdown memory entries from selected transcripts.
 4. The operator approves, edits, or rejects each proposal before any memory write.
-5. `finalize-transcript` records a pending event, reserves an archive destination in the ledger before it publishes the archive payload, archives only a validated main-session transcript without overwriting another archive, and records completion.
+5. `finalize-transcript` records a pending event.
+   It stages and synchronizes the archive payload.
+   It publishes that payload with exclusive hard-link creation.
+   It records the destination state.
+   It completes finalization only for a validated main-session transcript.
 
 Every finalization requires the SHA-256 `fingerprint` emitted by `score-prefilter`.
 If the transcript bytes differ, score and review the current transcript again.
 If the source changes during archiving, the finalizer records an `aborted` attempt and leaves the source available for a new score and approval.
 
 An interrupted finalization can be resumed without another memory write.
-If rollback cannot remove a published destination, recovery retains its destination-bound pending record until it can verify and synchronize the archive.
+If publication cannot be confirmed, recovery retains its pending attempt until it can verify and synchronize the archive.
+Recovery never removes a published destination.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/recover-pending-archives.js"
@@ -70,7 +75,7 @@ An unreadable ledger event is an audit record and does not exclude the transcrip
 - The plugin writes native memory only after an explicit operator decision.
 - Archive paths must remain under the configured Claude root.
 - The archive rejects traversal, source paths outside `projects/<slug>/`, and symbolic links.
-- Archive destinations use exclusive creation and preserve existing files with a numeric suffix.
+- Archive destinations use exclusive hard-link creation and preserve existing files with a numeric suffix.
 - The source remains until the archive payload exists.
 - Only `finalize-transcript` can remove an archivable source.
 - The ledger is append-only and excludes pending and completed archivable sessions from new proposals.

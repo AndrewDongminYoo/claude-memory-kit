@@ -43,17 +43,17 @@ Only `finalize-transcript` can remove an archivable source.
 An approved transcript moves through this state sequence:
 
 ```plaintext
-pending archive record -> destination-bound pending record -> archive payload published -> synchronized archive -> completed archive record
+pending archive record -> staged archive payload -> destination-bound pending record -> synchronized archive -> completed archive record
 pending archive record -> source version change -> aborted archive record -> score and approval
-published archive with failed rollback -> destination-bound pending record -> recovery
+published archive with failed synchronization -> destination-bound pending record -> recovery
 ```
 
 The initial record prevents a later scan from proposing the same transcript again.
-The destination-bound pending record reserves an archive path before the archive payload is published.
+The destination-bound pending record records an archive path after the archive payload is published.
 A recovery command completes a pending archive without repeating memory extraction or memory writes.
 An aborted record closes only the matching pending attempt and allows a changed source to be scored and approved again.
-If rollback cannot remove a published destination, recovery leaves its pending attempt in place until it can verify and synchronize that destination.
-A reserved event has `archive_ready: false` until the archive payload and its directory are synchronized.
+Recovery never removes a published destination.
+A destination-bound pending event has `archive_ready: false` until the archive directory is synchronized.
 If a legacy pending event has no attempt id, recovery leaves it pending when a source version changes.
 
 The archive operation must enforce all of these requirements:
@@ -63,7 +63,8 @@ The archive operation must enforce all of these requirements:
 - Reject source and destination paths that resolve outside their configured roots.
 - Reject symbolic links for the transcript source and slug directory.
 - Preserve existing archive files without overwriting them.
-- Allocate a collision suffix through an exclusive destination creation step.
+- Allocate a collision suffix through an exclusive hard-link creation step.
+- Do not overwrite or remove a published archive destination.
 - Keep the source until the archive payload is complete.
 - Leave malformed transcripts in place with the `unreadable` outcome only after the reviewed raw-byte fingerprint still matches.
 

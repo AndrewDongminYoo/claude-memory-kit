@@ -8,12 +8,6 @@ export class TranscriptVersionChangedError extends Error {
         this.name = "TranscriptVersionChangedError";
     }
 }
-class ArchiveRollbackError extends Error {
-    constructor(original, rollback) {
-        super(`archive rollback failed after ${original instanceof Error ? original.message : String(original)}: ${rollback instanceof Error ? rollback.message : String(rollback)}`);
-        this.name = "ArchiveRollbackError";
-    }
-}
 function assertSingleSegmentSlug(slug) {
     if (slug.length === 0 ||
         slug === "." ||
@@ -95,27 +89,21 @@ function descriptorContentsMatch(left, right) {
     }
 }
 function copyFromDescriptor(source, destination) {
-    const destinationDescriptor = fs.openSync(destination, "wx", 0o600);
     const buffer = Buffer.allocUnsafe(64 * 1024);
     const hash = createHash("sha256");
-    try {
-        for (;;) {
-            const bytesRead = fs.readSync(source, buffer, 0, buffer.length, null);
-            if (bytesRead === 0) {
-                break;
-            }
-            hash.update(buffer.subarray(0, bytesRead));
-            let offset = 0;
-            while (offset < bytesRead) {
-                offset += fs.writeSync(destinationDescriptor, buffer, offset, bytesRead - offset);
-            }
+    for (;;) {
+        const bytesRead = fs.readSync(source, buffer, 0, buffer.length, null);
+        if (bytesRead === 0) {
+            break;
         }
-        fs.fsyncSync(destinationDescriptor);
-        return hash.digest("hex");
+        hash.update(buffer.subarray(0, bytesRead));
+        let offset = 0;
+        while (offset < bytesRead) {
+            offset += fs.writeSync(destination, buffer, offset, bytesRead - offset);
+        }
     }
-    finally {
-        fs.closeSync(destinationDescriptor);
-    }
+    fs.fsyncSync(destination);
+    return hash.digest("hex");
 }
 function syncFile(pathname) {
     const descriptor = fs.openSync(pathname, fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW);
@@ -157,50 +145,37 @@ function destinationName(base, suffix) {
     const stem = base.slice(0, base.length - ext.length);
     return `${stem}.dup${suffix}${ext}`;
 }
-function rollbackPublishedDestination(destination, destinationDir, original) {
-    try {
-        fs.unlinkSync(destination);
-        syncDirectory(destinationDir);
-    }
-    catch (rollbackError) {
-        throw new ArchiveRollbackError(original, rollbackError);
+function assertPublishedDestination(destination, staging) {
+    if (!sameIdentity(staging, assertFile(destination, "archive destination"))) {
+        throw new Error("archive destination changed during publishing");
     }
 }
-function reserveAndPublishDestination(temporaryPath, destinationDir, base, onDestinationReserved, onDestinationReady) {
+function assertStagingPayload(temporaryPath, staging) {
+    if (!sameIdentity(staging, assertFile(temporaryPath, "archive staging payload"))) {
+        throw new Error("archive staging payload changed during publishing");
+    }
+}
+function publishDestination(temporaryPath, destinationDir, base, staging, onDestinationReserved, onDestinationReady) {
     for (let suffix = 0;; suffix += 1) {
         const name = destinationName(base, suffix);
         const destination = path.join(destinationDir, name);
-        let reserved = false;
+        assertStagingPayload(temporaryPath, staging);
         try {
-            const reservationDescriptor = fs.openSync(destination, "wx", 0o600);
-            reserved = true;
-            let reservation;
-            try {
-                reservation = fs.fstatSync(reservationDescriptor);
-                fs.fsyncSync(reservationDescriptor);
-            }
-            finally {
-                fs.closeSync(reservationDescriptor);
-            }
-            onDestinationReserved?.(destination);
-            if (!sameIdentity(reservation, assertFile(destination, "archive destination"))) {
-                throw new Error("archive destination changed during reservation");
-            }
-            fs.renameSync(temporaryPath, destination);
-            syncFile(destination);
-            syncDirectory(destinationDir);
-            onDestinationReady?.(destination);
-            return destination;
+            fs.linkSync(temporaryPath, destination);
         }
         catch (error) {
-            if (reserved) {
-                rollbackPublishedDestination(destination, destinationDir, error);
-                throw error;
-            }
             if (error.code !== "EEXIST") {
                 throw error;
             }
+            continue;
         }
+        onDestinationReserved?.(destination);
+        assertPublishedDestination(destination, staging);
+        syncDirectory(destinationDir);
+        assertPublishedDestination(destination, staging);
+        onDestinationReady?.(destination);
+        assertPublishedDestination(destination, staging);
+        return destination;
     }
 }
 function assertUnchangedPrivateDirectory(pathname, expected, label) {
@@ -290,26 +265,23 @@ export function archiveTranscript(opts) {
         const temporaryDir = fs.mkdtempSync(path.join(archiveSlugDir, ".cmk-archive-"));
         const temporaryPath = path.join(temporaryDir, base);
         try {
-            const copiedFingerprint = copyFromDescriptor(sourceDescriptor, temporaryPath);
-            if (copiedFingerprint !== opts.expectedFingerprint) {
-                throw new TranscriptVersionChangedError("source fingerprint changed since review");
-            }
-            assertUnchangedPrivateDirectory(archiveSlugDir, archiveSlugStat, "archive slug directory");
-            const destination = reserveAndPublishDestination(temporaryPath, archiveSlugDir, base, opts.onDestinationReserved, opts.onDestinationReady);
-            let sourceRemoved = false;
+            const temporaryDescriptor = fs.openSync(temporaryPath, "wx", 0o600);
             try {
+                const copiedFingerprint = copyFromDescriptor(sourceDescriptor, temporaryDescriptor);
+                if (copiedFingerprint !== opts.expectedFingerprint) {
+                    throw new TranscriptVersionChangedError("source fingerprint changed since review");
+                }
+                const staging = fs.fstatSync(temporaryDescriptor);
+                assertUnchangedPrivateDirectory(archiveSlugDir, archiveSlugStat, "archive slug directory");
+                const destination = publishDestination(temporaryPath, archiveSlugDir, base, staging, opts.onDestinationReserved, opts.onDestinationReady);
                 assertUnchangedPrivateDirectory(archiveSlugDir, archiveSlugStat, "archive slug directory");
                 assertUnchangedSource(source, sourceStat);
                 fs.unlinkSync(source);
-                sourceRemoved = true;
                 syncDirectory(projectSlugDir);
                 return destination;
             }
-            catch (error) {
-                if (!sourceRemoved) {
-                    rollbackPublishedDestination(destination, archiveSlugDir, error);
-                }
-                throw error;
+            finally {
+                fs.closeSync(temporaryDescriptor);
             }
         }
         finally {
