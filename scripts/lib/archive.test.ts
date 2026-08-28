@@ -326,23 +326,52 @@ test("collision gets a numeric suffix, never overwrites", () => {
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
 });
 
-test("reports a complete destination before removing the source", () => {
+test("reserves only the collision-safe destination in the ledger callback", () => {
   const { root, src } = setup();
-  let callbackRan = false;
+  const archiveDir = path.join(root, ".transcript-archive");
+  const existing = path.join(archiveDir, "proj", "session.jsonl");
+  fs.mkdirSync(path.dirname(existing), { recursive: true });
+  fs.writeFileSync(existing, "EXISTING\n");
+  const reserved: string[] = [];
+
+  archiveTranscript({
+    transcriptPath: src,
+    slug: "proj",
+    projectsDir: path.join(root, "projects"),
+    archiveDir,
+    onDestinationReserved: (destination) => reserved.push(destination),
+  });
+
+  assert.deepEqual(reserved, [
+    path.join(archiveDir, "proj", "session.dup1.jsonl"),
+  ]);
+  assert.equal(fs.readFileSync(existing, "utf8"), "EXISTING\n");
+});
+
+test("reserves an empty archive destination before publishing its payload", () => {
+  const { root, src } = setup();
+  let reserved = false;
+  let ready = false;
 
   archiveTranscript({
     transcriptPath: src,
     slug: "proj",
     projectsDir: path.join(root, "projects"),
     archiveDir: path.join(root, ".transcript-archive"),
+    onDestinationReserved: (destination) => {
+      reserved = true;
+      assert.equal(fs.readFileSync(destination, "utf8"), "");
+      assert.equal(fs.existsSync(src), true);
+    },
     onDestinationReady: (destination) => {
-      callbackRan = true;
-      assert.equal(fs.existsSync(destination), true);
+      ready = true;
+      assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
       assert.equal(fs.existsSync(src), true);
     },
   });
 
-  assert.equal(callbackRan, true);
+  assert.equal(reserved, true);
+  assert.equal(ready, true);
   assert.equal(fs.existsSync(src), false);
 });
 
@@ -376,6 +405,56 @@ test("keeps the source when final archive sync fails", () => {
   assert.equal(fs.existsSync(src), true, "source must remain in place");
 });
 
+test("removes a published destination when post-publish sync fails", () => {
+  const { root, src } = setup();
+  const archiveDir = path.join(root, ".transcript-archive");
+  const destination = path.join(archiveDir, "proj", "session.jsonl");
+  const originalOpenSync = fs.openSync;
+  const originalFsyncSync = fs.fsyncSync;
+  const descriptors = new Map<
+    number,
+    { pathname: string; flags: string | number }
+  >();
+  fs.openSync = ((pathname, flags, mode) => {
+    const descriptor = originalOpenSync(pathname, flags, mode);
+    descriptors.set(descriptor, {
+      pathname: path.resolve(pathname.toString()),
+      flags,
+    });
+    return descriptor;
+  }) as typeof fs.openSync;
+  fs.fsyncSync = ((descriptor: number) => {
+    const opened = descriptors.get(descriptor);
+    if (
+      opened?.pathname === destination &&
+      typeof opened.flags === "number" &&
+      (opened.flags & fs.constants.O_WRONLY) !== 0
+    ) {
+      throw new Error("post-publish sync failed");
+    }
+    return originalFsyncSync(descriptor);
+  }) as typeof fs.fsyncSync;
+
+  try {
+    assert.throws(
+      () =>
+        archiveTranscript({
+          transcriptPath: src,
+          slug: "proj",
+          projectsDir: path.join(root, "projects"),
+          archiveDir,
+        }),
+      /post-publish sync failed/,
+    );
+  } finally {
+    fs.openSync = originalOpenSync;
+    fs.fsyncSync = originalFsyncSync;
+  }
+
+  assert.equal(fs.existsSync(src), true);
+  assert.equal(fs.existsSync(destination), false);
+});
+
 test("keeps the source when its reviewed fingerprint does not match", () => {
   const { root, src } = setup();
 
@@ -406,7 +485,7 @@ test("does not remove a source path replaced during archiving", () => {
         slug: "proj",
         projectsDir: path.join(root, "projects"),
         archiveDir: path.join(root, ".transcript-archive"),
-        onDestinationReady: () => {
+        onDestinationReserved: () => {
           fs.renameSync(src, replacement);
           fs.symlinkSync(outside, src);
         },

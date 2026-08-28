@@ -4,7 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fingerprintContents } from "./fingerprint.ts";
-import { appendPendingArchive, readLedger } from "./ledger.ts";
+import {
+  appendPendingArchive,
+  minedSessions,
+  pendingArchives,
+  readLedger,
+} from "./ledger.ts";
 import { finalizeTranscript, recoverPendingArchives } from "./finalize.ts";
 
 const PAYLOAD_FINGERPRINT = fingerprintContents(Buffer.from("PAYLOAD\n"));
@@ -59,7 +64,7 @@ test("records pending before archiving and archived after completion", () => {
   );
   assert.deepEqual(
     readLedger(fixture.ledgerFile).map((record) => record.archive_state),
-    ["pending", "pending", "archived"],
+    ["pending", "pending", "pending", "archived"],
   );
   assert.equal(fs.existsSync(fixture.source), false);
 });
@@ -83,6 +88,8 @@ test("records the destination in pending state before completion", () => {
     records[1]?.archive_path,
     path.join(fixture.archiveDir, "proj", "session.jsonl"),
   );
+  assert.equal(records[1]?.archive_ready, false);
+  assert.equal(records[2]?.archive_ready, true);
 });
 
 test("rejects archive finalization when the reviewed fingerprint changed", () => {
@@ -105,6 +112,198 @@ test("rejects archive finalization when the reviewed fingerprint changed", () =>
   assert.equal(fs.existsSync(fixture.source), true);
   assert.equal(fs.existsSync(fixture.ledgerFile), false);
 });
+
+test("releases a source for rescoring when it changes during archiving", () => {
+  const fixture = setup();
+  const originalRenameSync = fs.renameSync;
+  let sourceChanged = false;
+  fs.renameSync = ((oldPath, newPath) => {
+    const result = originalRenameSync(oldPath, newPath);
+    if (!sourceChanged) {
+      sourceChanged = true;
+      fs.appendFileSync(fixture.source, "RESUMED\n");
+    }
+    return result;
+  }) as typeof fs.renameSync;
+
+  try {
+    assert.throws(
+      () =>
+        finalizeTranscript({
+          transcriptPath: fixture.source,
+          slug: "proj",
+          score: 14,
+          outcome: "memory-written",
+          memoryWritten: ["memory/lessons.md"],
+          ...fixture,
+          scopePrefixes: ["proj"],
+        }),
+      /source changed during archiving/,
+    );
+  } finally {
+    fs.renameSync = originalRenameSync;
+  }
+
+  assert.equal(fs.existsSync(fixture.source), true);
+  assert.deepEqual(
+    readLedger(fixture.ledgerFile).map((record) => record.archive_state),
+    ["pending", "pending", "pending", "aborted"],
+  );
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], []);
+});
+
+test(
+  "records a published destination when post-publish rollback fails",
+  { skip: process.platform === "win32" },
+  () => {
+    const fixture = setup();
+    const destination = path.join(fixture.archiveDir, "proj", "session.jsonl");
+    const originalOpenSync = fs.openSync;
+    const originalCloseSync = fs.closeSync;
+    const originalFsyncSync = fs.fsyncSync;
+    const originalUnlinkSync = fs.unlinkSync;
+    const descriptors = new Map<
+      number,
+      { pathname: string; flags: string | number }
+    >();
+    fs.openSync = ((pathname, flags, mode) => {
+      const descriptor = originalOpenSync(pathname, flags, mode);
+      descriptors.set(descriptor, {
+        pathname: path.resolve(pathname.toString()),
+        flags,
+      });
+      return descriptor;
+    }) as typeof fs.openSync;
+    fs.closeSync = ((descriptor: number) => {
+      descriptors.delete(descriptor);
+      return originalCloseSync(descriptor);
+    }) as typeof fs.closeSync;
+    fs.fsyncSync = ((descriptor: number) => {
+      const opened = descriptors.get(descriptor);
+      if (
+        opened?.pathname === destination &&
+        typeof opened.flags === "number" &&
+        (opened.flags & fs.constants.O_WRONLY) !== 0
+      ) {
+        throw new Error("post-publish sync failed");
+      }
+      return originalFsyncSync(descriptor);
+    }) as typeof fs.fsyncSync;
+    fs.unlinkSync = ((pathname) => {
+      if (path.resolve(pathname.toString()) === destination) {
+        throw new Error("rollback unlink failed");
+      }
+      return originalUnlinkSync(pathname);
+    }) as typeof fs.unlinkSync;
+
+    try {
+      assert.throws(
+        () =>
+          finalizeTranscript({
+            transcriptPath: fixture.source,
+            slug: "proj",
+            score: 14,
+            outcome: "memory-written",
+            memoryWritten: [],
+            ...fixture,
+            scopePrefixes: ["proj"],
+          }),
+        /archive rollback failed after post-publish sync failed/,
+      );
+    } finally {
+      fs.openSync = originalOpenSync;
+      fs.closeSync = originalCloseSync;
+      fs.fsyncSync = originalFsyncSync;
+      fs.unlinkSync = originalUnlinkSync;
+    }
+
+    assert.equal(fs.existsSync(fixture.source), true);
+    assert.equal(fs.existsSync(destination), true);
+    assert.deepEqual(
+      readLedger(fixture.ledgerFile).map((record) => record.archive_state),
+      ["pending", "pending"],
+    );
+    assert.equal(
+      pendingArchives(fixture.ledgerFile)[0]?.archive_path,
+      destination,
+    );
+  },
+);
+
+test(
+  "keeps a pending attempt when source-change rollback cannot sync",
+  { skip: process.platform === "win32" },
+  () => {
+    const fixture = setup();
+    const archiveSlugDir = path.join(fixture.archiveDir, "proj");
+    const originalRenameSync = fs.renameSync;
+    const originalOpenSync = fs.openSync;
+    const originalCloseSync = fs.closeSync;
+    const originalFsyncSync = fs.fsyncSync;
+    const directoryDescriptors = new Map<number, string>();
+    let sourceChanged = false;
+    let archiveSlugSyncsAfterLink = 0;
+    fs.renameSync = ((oldPath, newPath) => {
+      const result = originalRenameSync(oldPath, newPath);
+      if (!sourceChanged) {
+        sourceChanged = true;
+        fs.appendFileSync(fixture.source, "RESUMED\n");
+      }
+      return result;
+    }) as typeof fs.renameSync;
+    fs.openSync = ((pathname, flags, mode) => {
+      const descriptor = originalOpenSync(pathname, flags, mode);
+      if (
+        typeof flags === "number" &&
+        (flags & fs.constants.O_DIRECTORY) !== 0
+      ) {
+        directoryDescriptors.set(descriptor, path.resolve(pathname.toString()));
+      }
+      return descriptor;
+    }) as typeof fs.openSync;
+    fs.closeSync = ((descriptor: number) => {
+      directoryDescriptors.delete(descriptor);
+      return originalCloseSync(descriptor);
+    }) as typeof fs.closeSync;
+    fs.fsyncSync = ((descriptor: number) => {
+      if (directoryDescriptors.get(descriptor) === archiveSlugDir) {
+        archiveSlugSyncsAfterLink += 1;
+        if (sourceChanged && archiveSlugSyncsAfterLink === 2) {
+          throw new Error("rollback sync failed");
+        }
+      }
+      return originalFsyncSync(descriptor);
+    }) as typeof fs.fsyncSync;
+
+    try {
+      assert.throws(
+        () =>
+          finalizeTranscript({
+            transcriptPath: fixture.source,
+            slug: "proj",
+            score: 14,
+            outcome: "memory-written",
+            memoryWritten: [],
+            ...fixture,
+            scopePrefixes: ["proj"],
+          }),
+        /archive rollback failed/,
+      );
+    } finally {
+      fs.renameSync = originalRenameSync;
+      fs.openSync = originalOpenSync;
+      fs.closeSync = originalCloseSync;
+      fs.fsyncSync = originalFsyncSync;
+    }
+
+    assert.equal(fs.existsSync(fixture.source), true);
+    assert.deepEqual(
+      readLedger(fixture.ledgerFile).map((record) => record.archive_state),
+      ["pending", "pending", "pending"],
+    );
+    assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
+  },
+);
 
 test("recovery completes a pending archive without creating another memory record", () => {
   const fixture = setup();
@@ -132,7 +331,7 @@ test("recovery completes a pending archive without creating another memory recor
   const records = readLedger(fixture.ledgerFile);
   assert.deepEqual(
     records.map((record) => record.archive_state),
-    ["pending", "pending", "archived"],
+    ["pending", "pending", "pending", "archived"],
   );
   assert.equal(
     records[1]?.archive_path,
@@ -141,7 +340,106 @@ test("recovery completes a pending archive without creating another memory recor
   assert.deepEqual(records[1]?.memory_written, ["memory/lessons.md"]);
 });
 
-test("recovery keeps a source whose pending fingerprint no longer matches", () => {
+test("recovery replaces an empty reserved destination", () => {
+  const fixture = setup();
+  const reservedPath = path.join(fixture.archiveDir, "proj", "session.jsonl");
+  fs.mkdirSync(path.dirname(reservedPath), { recursive: true });
+  fs.writeFileSync(reservedPath, "");
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "memory-written",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    archive_path: reservedPath,
+    archive_ready: false,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
+    attempt_id: "reserved-attempt",
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 1);
+  assert.equal(fs.existsSync(fixture.source), false);
+  assert.equal(
+    readLedger(fixture.ledgerFile).at(-1)?.archive_path,
+    path.join(fixture.archiveDir, "proj", "session.dup1.jsonl"),
+  );
+});
+
+test("recovery completes a payload published before its ready event", () => {
+  const fixture = setup();
+  const reservedPath = path.join(fixture.archiveDir, "proj", "session.jsonl");
+  fs.mkdirSync(path.dirname(reservedPath), { recursive: true });
+  fs.writeFileSync(reservedPath, "PAYLOAD\n");
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "memory-written",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    archive_path: reservedPath,
+    archive_ready: false,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
+    attempt_id: "published-before-ready",
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 1);
+  assert.equal(fs.existsSync(fixture.source), false);
+  assert.equal(
+    readLedger(fixture.ledgerFile).at(-1)?.archive_path,
+    reservedPath,
+  );
+});
+
+test("recovery releases a source whose pending fingerprint no longer matches", () => {
+  const fixture = setup();
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "memory-written",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    source_fingerprint: "0".repeat(64),
+    attempt_id: "current-attempt",
+  });
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 0);
+  assert.deepEqual(result.unresolved, []);
+  assert.equal(fs.existsSync(fixture.source), true);
+  assert.equal(readLedger(fixture.ledgerFile).at(-1)?.archive_state, "aborted");
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], []);
+});
+
+test("recovery retains a legacy pending record when its source changed", () => {
   const fixture = setup();
   appendPendingArchive(fixture.ledgerFile, {
     session_id: "session",
@@ -163,8 +461,52 @@ test("recovery keeps a source whose pending fingerprint no longer matches", () =
   });
 
   assert.equal(result.completed, 0);
+  assert.match(result.unresolved[0]?.reason ?? "", /attempt identity/);
+  assert.deepEqual(
+    readLedger(fixture.ledgerFile).map((record) => record.archive_state),
+    ["pending"],
+  );
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
+});
+
+test("recovery retains a destination-bound pending attempt when its source changed", () => {
+  const fixture = setup();
+  const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");
+  fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+  fs.writeFileSync(archivePath, "PAYLOAD\n");
+  appendPendingArchive(fixture.ledgerFile, {
+    session_id: "session",
+    slug: "proj",
+    processed_at: "2026-08-27T00:00:00.000Z",
+    score: 14,
+    outcome: "memory-written",
+    memory_written: [],
+    archive_state: "pending",
+    transcript_path: fixture.source,
+    archive_path: archivePath,
+    source_fingerprint: PAYLOAD_FINGERPRINT,
+    attempt_id: "destination-bound",
+  });
+  fs.appendFileSync(fixture.source, "RESUMED\n");
+
+  const result = recoverPendingArchives({
+    projectsDir: fixture.projectsDir,
+    archiveDir: fixture.archiveDir,
+    ledgerFile: fixture.ledgerFile,
+    scopePrefixes: ["proj"],
+  });
+
+  assert.equal(result.completed, 0);
   assert.match(result.unresolved[0]?.reason ?? "", /fingerprint/);
-  assert.equal(fs.existsSync(fixture.source), true);
+  assert.deepEqual(
+    readLedger(fixture.ledgerFile).map((record) => record.archive_state),
+    ["pending"],
+  );
+  assert.equal(
+    pendingArchives(fixture.ledgerFile)[0]?.archive_path,
+    archivePath,
+  );
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
 });
 
 test("a second recovery run leaves a completed archive unchanged", () => {

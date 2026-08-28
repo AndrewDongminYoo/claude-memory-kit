@@ -6,6 +6,24 @@ import {
   isTranscriptFingerprint,
 } from "./fingerprint.ts";
 
+export class TranscriptVersionChangedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TranscriptVersionChangedError";
+  }
+}
+
+class ArchiveRollbackError extends Error {
+  constructor(original: unknown, rollback: unknown) {
+    super(
+      `archive rollback failed after ${
+        original instanceof Error ? original.message : String(original)
+      }: ${rollback instanceof Error ? rollback.message : String(rollback)}`,
+    );
+    this.name = "ArchiveRollbackError";
+  }
+}
+
 interface ArchiveOptions {
   transcriptPath: string;
   slug: string;
@@ -13,6 +31,7 @@ interface ArchiveOptions {
   archiveDir: string;
   existingArchivePath?: string;
   expectedFingerprint: string;
+  onDestinationReserved?: (destination: string) => void;
   onDestinationReady?: (destination: string) => void;
 }
 
@@ -77,6 +96,7 @@ function openValidatedFile(
   pathname: string,
   expected: fs.Stats,
   label: string,
+  rejectVersionChange = false,
 ): number {
   const descriptor = fs.openSync(
     pathname,
@@ -84,7 +104,10 @@ function openValidatedFile(
   );
   try {
     if (!sameFile(expected, fs.fstatSync(descriptor))) {
-      throw new Error(`${label} changed during archiving`);
+      const message = `${label} changed during archiving`;
+      throw rejectVersionChange
+        ? new TranscriptVersionChangedError(message)
+        : new Error(message);
     }
     return descriptor;
   } catch (error) {
@@ -202,20 +225,59 @@ function destinationName(base: string, suffix: number): string {
   return `${stem}.dup${suffix}${ext}`;
 }
 
-function copyToExclusiveDestination(
+function rollbackPublishedDestination(
+  destination: string,
+  destinationDir: string,
+  original: unknown,
+): void {
+  try {
+    fs.unlinkSync(destination);
+    syncDirectory(destinationDir);
+  } catch (rollbackError) {
+    throw new ArchiveRollbackError(original, rollbackError);
+  }
+}
+
+function reserveAndPublishDestination(
   temporaryPath: string,
   destinationDir: string,
   base: string,
+  onDestinationReserved?: (destination: string) => void,
+  onDestinationReady?: (destination: string) => void,
 ): string {
   for (let suffix = 0; ; suffix += 1) {
     const name = destinationName(base, suffix);
     const destination = path.join(destinationDir, name);
+    let reserved = false;
     try {
-      fs.linkSync(temporaryPath, destination);
+      const reservationDescriptor = fs.openSync(destination, "wx", 0o600);
+      reserved = true;
+      let reservation: fs.Stats;
+      try {
+        reservation = fs.fstatSync(reservationDescriptor);
+        fs.fsyncSync(reservationDescriptor);
+      } finally {
+        fs.closeSync(reservationDescriptor);
+      }
+      onDestinationReserved?.(destination);
+      if (
+        !sameIdentity(
+          reservation,
+          assertFile(destination, "archive destination"),
+        )
+      ) {
+        throw new Error("archive destination changed during reservation");
+      }
+      fs.renameSync(temporaryPath, destination);
       syncFile(destination);
       syncDirectory(destinationDir);
-      return name;
+      onDestinationReady?.(destination);
+      return destination;
     } catch (error) {
+      if (reserved) {
+        rollbackPublishedDestination(destination, destinationDir, error);
+        throw error;
+      }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
         throw error;
       }
@@ -230,6 +292,12 @@ function assertUnchangedPrivateDirectory(
 ): void {
   if (!sameIdentity(expected, assertPrivateDirectory(pathname, label))) {
     throw new Error(`${label} changed during archiving`);
+  }
+}
+
+function assertUnchangedSource(source: string, sourceStat: fs.Stats): void {
+  if (!sameFile(sourceStat, assertFile(source, "transcript source"))) {
+    throw new TranscriptVersionChangedError("source changed during archiving");
   }
 }
 
@@ -295,6 +363,7 @@ export function archiveTranscript(opts: ArchiveOptions): string {
     source,
     sourceStat,
     "transcript source",
+    true,
   );
   try {
     if (opts.existingArchivePath) {
@@ -319,7 +388,9 @@ export function archiveTranscript(opts: ArchiveOptions): string {
         if (
           fingerprintDescriptor(sourceDescriptor) !== opts.expectedFingerprint
         ) {
-          throw new Error("source fingerprint changed since review");
+          throw new TranscriptVersionChangedError(
+            "source fingerprint changed since review",
+          );
         }
         if (
           sourceStat.size !== existingStat.size ||
@@ -334,9 +405,7 @@ export function archiveTranscript(opts: ArchiveOptions): string {
           archiveSlugStat,
           "archive slug directory",
         );
-        if (!sameFile(sourceStat, assertFile(source, "transcript source"))) {
-          throw new Error("source changed during archiving");
-        }
+        assertUnchangedSource(source, sourceStat);
         if (
           !sameFile(
             existingStat,
@@ -345,6 +414,13 @@ export function archiveTranscript(opts: ArchiveOptions): string {
         ) {
           throw new Error("existing archive changed during archiving");
         }
+        syncFile(existingDestination);
+        syncDirectory(archiveSlugDir);
+        assertUnchangedPrivateDirectory(
+          archiveSlugDir,
+          archiveSlugStat,
+          "archive slug directory",
+        );
         removeSource(source, projectSlugDir);
         return existingDestination;
       } finally {
@@ -366,35 +442,40 @@ export function archiveTranscript(opts: ArchiveOptions): string {
         temporaryPath,
       );
       if (copiedFingerprint !== opts.expectedFingerprint) {
-        throw new Error("source fingerprint changed since review");
+        throw new TranscriptVersionChangedError(
+          "source fingerprint changed since review",
+        );
       }
       assertUnchangedPrivateDirectory(
         archiveSlugDir,
         archiveSlugStat,
         "archive slug directory",
       );
-      const destinationName = copyToExclusiveDestination(
+      const destination = reserveAndPublishDestination(
         temporaryPath,
         archiveSlugDir,
         base,
+        opts.onDestinationReserved,
+        opts.onDestinationReady,
       );
-      const destination = path.join(archiveSlugDir, destinationName);
-      assertUnchangedPrivateDirectory(
-        archiveSlugDir,
-        archiveSlugStat,
-        "archive slug directory",
-      );
-      opts.onDestinationReady?.(destination);
-      assertUnchangedPrivateDirectory(
-        archiveSlugDir,
-        archiveSlugStat,
-        "archive slug directory",
-      );
-      if (!sameFile(sourceStat, assertFile(source, "transcript source"))) {
-        throw new Error("source changed during archiving");
+      let sourceRemoved = false;
+      try {
+        assertUnchangedPrivateDirectory(
+          archiveSlugDir,
+          archiveSlugStat,
+          "archive slug directory",
+        );
+        assertUnchangedSource(source, sourceStat);
+        fs.unlinkSync(source);
+        sourceRemoved = true;
+        syncDirectory(projectSlugDir);
+        return destination;
+      } catch (error) {
+        if (!sourceRemoved) {
+          rollbackPublishedDestination(destination, archiveSlugDir, error);
+        }
+        throw error;
       }
-      removeSource(source, projectSlugDir);
-      return destination;
     } finally {
       fs.rmSync(temporaryDir, { recursive: true, force: true });
     }

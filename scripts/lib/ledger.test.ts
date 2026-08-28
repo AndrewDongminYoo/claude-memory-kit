@@ -9,6 +9,7 @@ import {
   appendLedger,
   appendCompletedArchive,
   appendPendingArchive,
+  appendAbortedArchive,
   pendingArchives,
   type LedgerRecord,
 } from "./ledger.ts";
@@ -199,4 +200,82 @@ test("pendingArchives excludes a session after its archived event", () => {
     pendingArchives(f).map((record) => record.session_id),
     ["pending"],
   );
+});
+
+test("an aborted archive event releases a pending session for rescoring", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  const pending = rec({
+    session_id: "aborted",
+    archive_state: "pending",
+    transcript_path: "/fixture/projects/proj/aborted.jsonl",
+    attempt_id: "aborted-attempt",
+  });
+  appendPendingArchive(f, pending);
+  appendAbortedArchive(f, pending);
+
+  assert.deepEqual(pendingArchives(f), []);
+  assert.deepEqual([...minedSessions(f)], []);
+  assert.equal(readLedger(f).at(-1)?.archive_state, "aborted");
+});
+
+test("an aborted attempt does not close a different pending attempt", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  const first = rec({
+    session_id: "attempts",
+    archive_state: "pending",
+    transcript_path: "/fixture/projects/proj/attempts.jsonl",
+    attempt_id: "first",
+  });
+  const second = { ...first, attempt_id: "second" };
+  appendPendingArchive(f, first);
+  appendPendingArchive(f, second);
+  appendAbortedArchive(f, second);
+
+  assert.deepEqual(
+    pendingArchives(f).map((record) => record.attempt_id),
+    ["first"],
+  );
+  assert.deepEqual([...minedSessions(f)], ["attempts"]);
+});
+
+test("legacy source and destination pending records form one recovery attempt", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  const sourcePending = rec({
+    session_id: "legacy-attempts",
+    archive_state: "pending",
+    transcript_path: "/fixture/projects/proj/legacy-attempts.jsonl",
+  });
+  const destinationPending = {
+    ...sourcePending,
+    archive_path: "/fixture/archive/proj/legacy-attempts.jsonl",
+  };
+  appendPendingArchive(f, sourcePending);
+  appendPendingArchive(f, destinationPending);
+
+  assert.deepEqual(
+    pendingArchives(f).map((record) => record.archive_path),
+    [destinationPending.archive_path],
+  );
+  assert.deepEqual([...minedSessions(f)], ["legacy-attempts"]);
+});
+
+test("an aborted later attempt cannot reopen a completed session", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  const completedAttempt = rec({
+    session_id: "completed-session",
+    archive_state: "pending",
+    transcript_path: "/fixture/projects/proj/completed-session.jsonl",
+    attempt_id: "completed-attempt",
+  });
+  const abortedAttempt = { ...completedAttempt, attempt_id: "aborted-attempt" };
+  appendPendingArchive(f, completedAttempt);
+  appendCompletedArchive(f, {
+    ...completedAttempt,
+    archive_path: "/fixture/archive/proj/completed-session.jsonl",
+  });
+  appendPendingArchive(f, abortedAttempt);
+  appendAbortedArchive(f, abortedAttempt);
+
+  assert.deepEqual(pendingArchives(f), []);
+  assert.deepEqual([...minedSessions(f)], ["completed-session"]);
 });

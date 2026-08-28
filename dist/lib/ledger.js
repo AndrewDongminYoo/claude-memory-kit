@@ -1,30 +1,65 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isTranscriptFingerprint } from "./fingerprint.js";
-/** Read the append-only ledger; a missing file is an empty ledger. */
-export function readLedger(file) {
+function readLedgerEvents(file) {
     if (!fs.existsSync(file))
         return [];
     const contents = fs.readFileSync(file, "utf8");
     const lines = contents.split("\n");
-    return lines.flatMap((line, index) => {
+    return lines.flatMap((line, lineIndex) => {
         if (line.trim().length === 0) {
             return [];
         }
         try {
-            return [JSON.parse(line)];
+            const record = JSON.parse(line);
+            return [{ record }];
         }
         catch (error) {
-            if (index === lines.length - 1 && !contents.endsWith("\n")) {
+            if (lineIndex === lines.length - 1 && !contents.endsWith("\n")) {
                 return [];
             }
-            throw new Error(`invalid ledger event at line ${index + 1}: ${error instanceof Error ? error.message : String(error)}`);
+            throw new Error(`invalid ledger event at line ${lineIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
         }
     });
 }
+/** Read the append-only ledger; a missing file is an empty ledger. */
+export function readLedger(file) {
+    return readLedgerEvents(file).map(({ record }) => record);
+}
+function archiveAttemptKey(record) {
+    return (record.attempt_id ??
+        `legacy:${JSON.stringify([
+            record.transcript_path ?? "",
+            record.source_fingerprint ?? "",
+        ])}`);
+}
 /** Set of session ids already processed — the source of truth for "un-mined". */
 export function minedSessions(file) {
-    return new Set(readLedger(file).map((r) => r.session_id));
+    const completed = new Set();
+    const pending = new Map();
+    for (const { record } of readLedgerEvents(file)) {
+        if (!record.archive_state) {
+            completed.add(record.session_id);
+            continue;
+        }
+        const key = archiveAttemptKey(record);
+        if (record.archive_state === "pending") {
+            const attempts = pending.get(record.session_id) ?? new Set();
+            attempts.add(key);
+            pending.set(record.session_id, attempts);
+        }
+        else if (record.archive_state === "archived") {
+            completed.add(record.session_id);
+            pending.get(record.session_id)?.delete(key);
+        }
+        else if (record.archive_state === "aborted" && record.attempt_id) {
+            pending.get(record.session_id)?.delete(key);
+        }
+    }
+    return new Set([
+        ...completed,
+        ...[...pending].flatMap(([sessionId, attempts]) => attempts.size > 0 ? [sessionId] : []),
+    ]);
 }
 function syncDirectory(pathname) {
     if (process.platform === "win32") {
@@ -113,20 +148,34 @@ export function appendCompletedArchive(file, rec) {
     }
     appendLedger(file, { ...rec, archive_state: "archived" });
 }
+/** Close an archive attempt so a changed source can be scored again. */
+export function appendAbortedArchive(file, rec) {
+    if (rec.outcome === "unreadable" ||
+        !rec.transcript_path ||
+        !rec.attempt_id ||
+        !isTranscriptFingerprint(rec.source_fingerprint)) {
+        throw new Error("aborted archive record requires an archivable source");
+    }
+    appendLedger(file, { ...rec, archive_state: "aborted" });
+}
 function isPendingArchiveRecord(record) {
     return (record.archive_state === "pending" &&
         record.outcome !== "unreadable" &&
         typeof record.transcript_path === "string");
 }
-/** Returns the latest unfinished archive event for each session. */
+/** Returns the latest unfinished archive event for each attempt. */
 export function pendingArchives(file) {
     const pending = new Map();
-    for (const record of readLedger(file)) {
+    for (const { record } of readLedgerEvents(file)) {
+        const key = `${record.session_id}:${archiveAttemptKey(record)}`;
         if (isPendingArchiveRecord(record)) {
-            pending.set(record.session_id, record);
+            pending.set(key, record);
         }
         else if (record.archive_state === "archived") {
-            pending.delete(record.session_id);
+            pending.delete(key);
+        }
+        else if (record.attempt_id && record.archive_state === "aborted") {
+            pending.delete(key);
         }
     }
     return [...pending.values()];

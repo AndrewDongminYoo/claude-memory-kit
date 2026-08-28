@@ -6,7 +6,7 @@ import { isTranscriptFingerprint } from "./fingerprint.ts";
 export type Outcome =
   "memory-written" | "proposed-rejected" | "skipped-low-score" | "unreadable";
 
-export type ArchiveState = "pending" | "archived";
+export type ArchiveState = "pending" | "archived" | "aborted";
 
 export type ArchiveOutcome = Exclude<Outcome, "unreadable">;
 
@@ -20,7 +20,9 @@ export interface LedgerRecord {
   archive_state?: ArchiveState;
   transcript_path?: string;
   archive_path?: string;
+  archive_ready?: boolean;
   source_fingerprint?: string;
+  attempt_id?: string;
 }
 
 export interface PendingArchiveRecord extends LedgerRecord {
@@ -36,23 +38,27 @@ export interface CompletedArchiveRecord extends LedgerRecord {
   outcome: ArchiveOutcome;
 }
 
-/** Read the append-only ledger; a missing file is an empty ledger. */
-export function readLedger(file: string): LedgerRecord[] {
+interface LedgerEvent {
+  record: LedgerRecord;
+}
+
+function readLedgerEvents(file: string): LedgerEvent[] {
   if (!fs.existsSync(file)) return [];
   const contents = fs.readFileSync(file, "utf8");
   const lines = contents.split("\n");
-  return lines.flatMap((line, index) => {
+  return lines.flatMap((line, lineIndex) => {
     if (line.trim().length === 0) {
       return [];
     }
     try {
-      return [JSON.parse(line) as LedgerRecord];
+      const record = JSON.parse(line) as LedgerRecord;
+      return [{ record }];
     } catch (error) {
-      if (index === lines.length - 1 && !contents.endsWith("\n")) {
+      if (lineIndex === lines.length - 1 && !contents.endsWith("\n")) {
         return [];
       }
       throw new Error(
-        `invalid ledger event at line ${index + 1}: ${
+        `invalid ledger event at line ${lineIndex + 1}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -60,9 +66,48 @@ export function readLedger(file: string): LedgerRecord[] {
   });
 }
 
+/** Read the append-only ledger; a missing file is an empty ledger. */
+export function readLedger(file: string): LedgerRecord[] {
+  return readLedgerEvents(file).map(({ record }) => record);
+}
+
+function archiveAttemptKey(record: LedgerRecord): string {
+  return (
+    record.attempt_id ??
+    `legacy:${JSON.stringify([
+      record.transcript_path ?? "",
+      record.source_fingerprint ?? "",
+    ])}`
+  );
+}
+
 /** Set of session ids already processed — the source of truth for "un-mined". */
 export function minedSessions(file: string): Set<string> {
-  return new Set(readLedger(file).map((r) => r.session_id));
+  const completed = new Set<string>();
+  const pending = new Map<string, Set<string>>();
+  for (const { record } of readLedgerEvents(file)) {
+    if (!record.archive_state) {
+      completed.add(record.session_id);
+      continue;
+    }
+    const key = archiveAttemptKey(record);
+    if (record.archive_state === "pending") {
+      const attempts = pending.get(record.session_id) ?? new Set<string>();
+      attempts.add(key);
+      pending.set(record.session_id, attempts);
+    } else if (record.archive_state === "archived") {
+      completed.add(record.session_id);
+      pending.get(record.session_id)?.delete(key);
+    } else if (record.archive_state === "aborted" && record.attempt_id) {
+      pending.get(record.session_id)?.delete(key);
+    }
+  }
+  return new Set([
+    ...completed,
+    ...[...pending].flatMap(([sessionId, attempts]) =>
+      attempts.size > 0 ? [sessionId] : [],
+    ),
+  ]);
 }
 
 function syncDirectory(pathname: string): void {
@@ -167,6 +212,19 @@ export function appendCompletedArchive(file: string, rec: LedgerRecord): void {
   appendLedger(file, { ...rec, archive_state: "archived" });
 }
 
+/** Close an archive attempt so a changed source can be scored again. */
+export function appendAbortedArchive(file: string, rec: LedgerRecord): void {
+  if (
+    rec.outcome === "unreadable" ||
+    !rec.transcript_path ||
+    !rec.attempt_id ||
+    !isTranscriptFingerprint(rec.source_fingerprint)
+  ) {
+    throw new Error("aborted archive record requires an archivable source");
+  }
+  appendLedger(file, { ...rec, archive_state: "aborted" });
+}
+
 function isPendingArchiveRecord(
   record: LedgerRecord,
 ): record is PendingArchiveRecord {
@@ -177,14 +235,17 @@ function isPendingArchiveRecord(
   );
 }
 
-/** Returns the latest unfinished archive event for each session. */
+/** Returns the latest unfinished archive event for each attempt. */
 export function pendingArchives(file: string): PendingArchiveRecord[] {
   const pending = new Map<string, PendingArchiveRecord>();
-  for (const record of readLedger(file)) {
+  for (const { record } of readLedgerEvents(file)) {
+    const key = `${record.session_id}:${archiveAttemptKey(record)}`;
     if (isPendingArchiveRecord(record)) {
-      pending.set(record.session_id, record);
+      pending.set(key, record);
     } else if (record.archive_state === "archived") {
-      pending.delete(record.session_id);
+      pending.delete(key);
+    } else if (record.attempt_id && record.archive_state === "aborted") {
+      pending.delete(key);
     }
   }
   return [...pending.values()];

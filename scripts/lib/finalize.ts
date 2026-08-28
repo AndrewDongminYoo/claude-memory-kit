@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { archiveTranscript } from "./archive.ts";
+import { randomUUID } from "node:crypto";
+import { archiveTranscript, TranscriptVersionChangedError } from "./archive.ts";
 import {
   fingerprintDescriptor,
   isTranscriptFingerprint,
 } from "./fingerprint.ts";
 import {
   appendLedger,
+  appendAbortedArchive,
   appendCompletedArchive,
   appendPendingArchive,
   pendingArchives,
@@ -61,7 +63,9 @@ function sessionIdFor(transcriptPath: string): string {
 
 function ledgerRecord(
   options: FinalizeOptions,
+  attemptId?: string,
   archivePath?: string,
+  archiveReady?: boolean,
 ): LedgerRecord {
   return {
     session_id: sessionIdFor(options.transcriptPath),
@@ -72,7 +76,9 @@ function ledgerRecord(
     memory_written: options.memoryWritten,
     transcript_path: path.resolve(options.transcriptPath),
     archive_path: archivePath,
+    archive_ready: archiveReady,
     source_fingerprint: options.expectedFingerprint,
+    attempt_id: attemptId,
   };
 }
 
@@ -100,34 +106,49 @@ export function finalizeTranscript(options: FinalizeOptions): {
   archivePath?: string;
 } {
   assertSlugInScope(options.slug, options.scopePrefixes);
-  const pending = ledgerRecord(options);
   if (options.outcome === "unreadable") {
     assertSafeTranscriptPath(
       options.transcriptPath,
       options.slug,
       options.projectsDir,
     );
-    appendLedger(options.ledgerFile, pending);
+    appendLedger(options.ledgerFile, ledgerRecord(options));
     return {};
   }
   const expectedFingerprint = assertReviewedFingerprint(options);
+  const attemptId = randomUUID();
+  const pending = ledgerRecord(options, attemptId);
   appendPendingArchive(options.ledgerFile, pending);
-  const archivePath = archiveTranscript({
-    transcriptPath: options.transcriptPath,
-    slug: options.slug,
-    projectsDir: options.projectsDir,
-    archiveDir: options.archiveDir,
-    expectedFingerprint,
-    onDestinationReady: (destination) => {
-      appendPendingArchive(
-        options.ledgerFile,
-        ledgerRecord(options, destination),
-      );
-    },
-  });
+  let archivePath: string;
+  try {
+    archivePath = archiveTranscript({
+      transcriptPath: options.transcriptPath,
+      slug: options.slug,
+      projectsDir: options.projectsDir,
+      archiveDir: options.archiveDir,
+      expectedFingerprint,
+      onDestinationReserved: (destination) => {
+        appendPendingArchive(
+          options.ledgerFile,
+          ledgerRecord(options, attemptId, destination, false),
+        );
+      },
+      onDestinationReady: (destination) => {
+        appendPendingArchive(
+          options.ledgerFile,
+          ledgerRecord(options, attemptId, destination, true),
+        );
+      },
+    });
+  } catch (error) {
+    if (error instanceof TranscriptVersionChangedError) {
+      appendAbortedArchive(options.ledgerFile, pending);
+    }
+    throw error;
+  }
   appendCompletedArchive(
     options.ledgerFile,
-    ledgerRecord(options, archivePath),
+    ledgerRecord(options, attemptId, archivePath, true),
   );
   return { archivePath };
 }
@@ -203,11 +224,13 @@ function completionRecord(
   record: LedgerRecord,
   archivePath: string,
   now?: number,
+  archiveReady?: boolean,
 ): LedgerRecord {
   return {
     ...record,
     processed_at: processedAt(now),
     archive_path: archivePath,
+    archive_ready: archiveReady,
   };
 }
 
@@ -225,6 +248,7 @@ export function recoverPendingArchives(
       result.skippedOutOfScope += 1;
       continue;
     }
+    let retainedArchive = false;
     try {
       assertDirectTranscriptPath(
         record.transcript_path,
@@ -240,57 +264,77 @@ export function recoverPendingArchives(
         continue;
       }
       const expectedFingerprint = record.source_fingerprint;
-      if (
-        isRecordedArchiveFile(
+      const recordedArchive = isRecordedArchiveFile(
+        recordedArchivePath,
+        record.slug,
+        options.archiveDir,
+      );
+      if (recordedArchive) {
+        const matchesFingerprint = recordedArchiveMatchesFingerprint(
           recordedArchivePath,
-          record.slug,
-          options.archiveDir,
-        )
-      ) {
-        if (
-          !recordedArchiveMatchesFingerprint(
-            recordedArchivePath,
-            expectedFingerprint,
-          )
-        ) {
+          expectedFingerprint,
+        );
+        if (!matchesFingerprint && record.archive_ready === false) {
+          const recordedStat = fs.lstatSync(recordedArchivePath);
+          if (recordedStat.size === 0) {
+            // The durable reservation has no payload yet, so make a new archive.
+          } else {
+            result.unresolved.push({
+              sessionId: record.session_id,
+              reason:
+                "reserved archive does not match the reviewed fingerprint",
+            });
+            continue;
+          }
+        } else if (!matchesFingerprint) {
           result.unresolved.push({
             sessionId: record.session_id,
             reason: "recorded archive does not match the reviewed fingerprint",
           });
           continue;
+        } else {
+          retainedArchive = true;
+          if (fs.existsSync(record.transcript_path)) {
+            archiveTranscript({
+              transcriptPath: record.transcript_path,
+              slug: record.slug,
+              projectsDir: options.projectsDir,
+              archiveDir: options.archiveDir,
+              expectedFingerprint,
+              existingArchivePath: recordedArchivePath,
+            });
+          }
+          appendCompletedArchive(
+            options.ledgerFile,
+            completionRecord(record, recordedArchivePath, options.now, true),
+          );
+          result.completed += 1;
+          continue;
         }
-        if (fs.existsSync(record.transcript_path)) {
-          archiveTranscript({
-            transcriptPath: record.transcript_path,
-            slug: record.slug,
-            projectsDir: options.projectsDir,
-            archiveDir: options.archiveDir,
-            expectedFingerprint,
-            existingArchivePath: recordedArchivePath,
-          });
-        }
-        appendCompletedArchive(
-          options.ledgerFile,
-          completionRecord(record, recordedArchivePath, options.now),
-        );
-        result.completed += 1;
-      } else if (fs.existsSync(record.transcript_path)) {
+      }
+      if (fs.existsSync(record.transcript_path)) {
         const archivePath = archiveTranscript({
           transcriptPath: record.transcript_path,
           slug: record.slug,
           projectsDir: options.projectsDir,
           archiveDir: options.archiveDir,
           expectedFingerprint,
+          onDestinationReserved: (destination) => {
+            appendPendingArchive(
+              options.ledgerFile,
+              completionRecord(record, destination, options.now, false),
+            );
+          },
           onDestinationReady: (destination) => {
             appendPendingArchive(
               options.ledgerFile,
-              completionRecord(record, destination, options.now),
+              completionRecord(record, destination, options.now, true),
             );
           },
         });
         appendCompletedArchive(
           options.ledgerFile,
-          completionRecord(record, archivePath, options.now),
+          completionRecord(record, archivePath, options.now, true),
         );
         result.completed += 1;
       } else {
@@ -300,6 +344,17 @@ export function recoverPendingArchives(
         });
       }
     } catch (error) {
+      if (error instanceof TranscriptVersionChangedError && !retainedArchive) {
+        if (record.attempt_id) {
+          appendAbortedArchive(options.ledgerFile, record);
+          continue;
+        }
+        result.unresolved.push({
+          sessionId: record.session_id,
+          reason: "legacy pending archive has no attempt identity",
+        });
+        continue;
+      }
       result.unresolved.push({
         sessionId: record.session_id,
         reason: error instanceof Error ? error.message : String(error),

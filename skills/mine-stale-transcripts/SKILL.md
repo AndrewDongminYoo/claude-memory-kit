@@ -104,11 +104,13 @@ After the approved memory write, or after the operator confirms a rejection or l
 node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> <score> <memory-written|proposed-rejected|skipped-low-score> <fingerprint> [memory.md ...]
 ```
 
-The finalizer records a pending archive event before moving the transcript.
-It preserves the source until the destination payload exists.
+The finalizer records a pending archive event before it reserves the archive destination.
+It records that destination before it publishes or synchronizes the archive payload, or removes the source.
 It then writes a completion event.
 It rejects an archivable source whose bytes no longer match the reviewed `fingerprint`.
+If the source changes during archiving, it records an `aborted` attempt and leaves the source for a new score and approval.
 Rescore and obtain approval again when that happens.
+If archive rollback fails, recovery retains the destination-bound pending record until it can verify the destination.
 
 Use the recovery command in step 1 if the command stops before completion.
 Do not run the finalizer against a path outside the configured `projects/<slug>/` directory.

@@ -43,12 +43,18 @@ Only `finalize-transcript` can remove an archivable source.
 An approved transcript moves through this state sequence:
 
 ```plaintext
-pending archive record -> safe archive -> destination-bound pending record -> completed archive record
+pending archive record -> destination-bound pending record -> archive payload published -> synchronized archive -> completed archive record
+pending archive record -> source version change -> aborted archive record -> score and approval
+published archive with failed rollback -> destination-bound pending record -> recovery
 ```
 
 The initial record prevents a later scan from proposing the same transcript again.
-The destination-bound pending record makes a completed archive discoverable if the process stops before its completion event.
+The destination-bound pending record reserves an archive path before the archive payload is published.
 A recovery command completes a pending archive without repeating memory extraction or memory writes.
+An aborted record closes only the matching pending attempt and allows a changed source to be scored and approved again.
+If rollback cannot remove a published destination, recovery leaves its pending attempt in place until it can verify and synchronize that destination.
+A reserved event has `archive_ready: false` until the archive payload and its directory are synchronized.
+If a legacy pending event has no attempt id, recovery leaves it pending when a source version changes.
 
 The archive operation must enforce all of these requirements:
 
@@ -67,8 +73,10 @@ The ledger stores immutable JSONL events.
 Each event includes the session id, slug, outcome, score, memory paths, archive state, and archive path when it exists.
 
 `minedSessions` treats pending and completed records as excluded from new memory proposals.
-`pendingArchives` returns the latest pending record for each session.
+An aborted record releases only the matching attempt.
+`pendingArchives` returns the latest pending record for each attempt.
 The recovery command resolves a pending record only when its source remains in the validated project path or its archive destination already exists.
+It synchronizes a recorded archive before it removes a duplicate source.
 It must otherwise report an error and leave the record unchanged.
 
 ## Malformed transcript contract
