@@ -14,24 +14,13 @@ function main() {
         process.exit(2);
     }
     const cap = parseMaxPerProject(process.env.MAX_PER_PROJECT);
-    const scopedPaths = [];
-    try {
-        for (const transcriptPath of transcriptPaths) {
-            const slug = path.basename(path.dirname(transcriptPath));
-            assertSlugInScope(slug, scopePrefixes);
-            scopedPaths.push({
-                transcriptPath,
-                slug,
-                descriptor: openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir),
-            });
-        }
-    }
-    catch (error) {
-        for (const { descriptor } of scopedPaths)
-            fs.closeSync(descriptor);
-        throw error;
-    }
-    const rows = scopedPaths.map(({ transcriptPath, slug, descriptor }) => {
+    const scopedPaths = transcriptPaths.map((transcriptPath) => {
+        const slug = path.basename(path.dirname(transcriptPath));
+        assertSlugInScope(slug, scopePrefixes);
+        return { transcriptPath, slug };
+    });
+    const rows = scopedPaths.map(({ transcriptPath, slug }) => {
+        const descriptor = openSafeTranscriptFile(transcriptPath, slug, configuredProjectsDir);
         try {
             const raw = fs.readFileSync(descriptor, "utf8");
             if (isUnreadableTranscript(raw)) {

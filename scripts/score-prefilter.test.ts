@@ -29,6 +29,35 @@ function runScorePrefilter(
   );
 }
 
+function runScorePrefilterWithFdLimit(
+  files: string[],
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return childProcess.spawnSync(
+    "/bin/bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      'ulimit -n 64; exec "$@"',
+      "score-prefilter",
+      process.execPath,
+      "--import",
+      "tsx",
+      scorePrefilter,
+      ...files,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...env,
+        CMK_SCOPE_SLUG_PREFIXES:
+          env.CMK_SCOPE_SLUG_PREFIXES ?? "cmk-score-cli-",
+      },
+    },
+  );
+}
+
 test("reports malformed JSONL as unreadable and never selects it", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
   const transcript = path.join(
@@ -52,14 +81,47 @@ test("reports malformed JSONL as unreadable and never selects it", () => {
 });
 
 test("rejects a fractional MAX_PER_PROJECT before reading transcripts", () => {
+  const configRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "cmk-score-config-"),
+  );
   const result = runScorePrefilter(["/not/read.jsonl"], {
     ...process.env,
+    CLAUDE_CONFIG_DIR: configRoot,
     MAX_PER_PROJECT: "1.5",
   });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /invalid MAX_PER_PROJECT/);
 });
+
+test(
+  "scores a large batch without retaining all transcript descriptors",
+  { skip: process.platform === "win32" },
+  () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
+    const projectDir = path.join(root, "projects", "cmk-score-cli-project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const transcripts = Array.from({ length: 128 }, (_, index) => {
+      const transcript = path.join(projectDir, `session-${index}.jsonl`);
+      fs.writeFileSync(
+        transcript,
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: `session ${index}` },
+        }) + "\n",
+      );
+      return transcript;
+    });
+
+    const result = runScorePrefilterWithFdLimit(transcripts, {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: root,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim().split("\n").length, transcripts.length);
+  },
+);
 
 test("deduplicates repeated transcript arguments before selection", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cmk-score-cli-"));
@@ -116,6 +178,7 @@ test("rejects an out-of-scope transcript before scoring it", () => {
 
   const result = runScorePrefilter([transcript], {
     ...process.env,
+    CLAUDE_CONFIG_DIR: root,
     CMK_SCOPE_SLUG_PREFIXES: "personal-",
   });
 

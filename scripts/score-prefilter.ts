@@ -47,57 +47,42 @@ function main(): void {
     process.exit(2);
   }
   const cap = parseMaxPerProject(process.env.MAX_PER_PROJECT);
-  const scopedPaths: Array<{
-    transcriptPath: string;
-    slug: string;
-    descriptor: number;
-  }> = [];
-  try {
-    for (const transcriptPath of transcriptPaths) {
-      const slug = path.basename(path.dirname(transcriptPath));
-      assertSlugInScope(slug, scopePrefixes);
-      scopedPaths.push({
-        transcriptPath,
-        slug,
-        descriptor: openSafeTranscriptFile(
-          transcriptPath,
-          slug,
-          configuredProjectsDir,
-        ),
-      });
-    }
-  } catch (error) {
-    for (const { descriptor } of scopedPaths) fs.closeSync(descriptor);
-    throw error;
-  }
+  const scopedPaths = transcriptPaths.map((transcriptPath) => {
+    const slug = path.basename(path.dirname(transcriptPath));
+    assertSlugInScope(slug, scopePrefixes);
+    return { transcriptPath, slug };
+  });
 
-  const rows: Row[] = scopedPaths.map(
-    ({ transcriptPath, slug, descriptor }) => {
-      try {
-        const raw = fs.readFileSync(descriptor, "utf8");
-        if (isUnreadableTranscript(raw)) {
-          return {
-            path: transcriptPath,
-            slug,
-            score: 0,
-            unreadable: true,
-            error: "no valid JSONL transcript entries",
-          };
-        }
-        return { path: transcriptPath, slug, ...scoreTranscript(raw) };
-      } catch (error) {
+  const rows: Row[] = scopedPaths.map(({ transcriptPath, slug }) => {
+    const descriptor = openSafeTranscriptFile(
+      transcriptPath,
+      slug,
+      configuredProjectsDir,
+    );
+    try {
+      const raw = fs.readFileSync(descriptor, "utf8");
+      if (isUnreadableTranscript(raw)) {
         return {
           path: transcriptPath,
           slug,
           score: 0,
           unreadable: true,
-          error: error instanceof Error ? error.message : String(error),
+          error: "no valid JSONL transcript entries",
         };
-      } finally {
-        fs.closeSync(descriptor);
       }
-    },
-  );
+      return { path: transcriptPath, slug, ...scoreTranscript(raw) };
+    } catch (error) {
+      return {
+        path: transcriptPath,
+        slug,
+        score: 0,
+        unreadable: true,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  });
 
   const selectedRows = selectForDeepRead(rows, cap);
   const selected = new Set(selectedRows.map((row) => row.path));
