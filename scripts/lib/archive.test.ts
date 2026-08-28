@@ -57,7 +57,7 @@ function withWindowsDirectoryFsyncUnavailable(action: () => void): void {
   }
 }
 
-test("requires a reviewed fingerprint before removing a source", () => {
+test("requires a reviewed fingerprint before archiving a source", () => {
   const { root, src } = setup();
   const unsafeOptions = {
     transcriptPath: src,
@@ -76,7 +76,7 @@ test("requires a reviewed fingerprint before removing a source", () => {
   assert.equal(fs.existsSync(src), true);
 });
 
-test("moves the transcript into archive/<slug>, preserving content, removing source", () => {
+test("copies the transcript into archive/<slug>, preserving its source", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
   const dest = archiveTranscript({
@@ -86,7 +86,7 @@ test("moves the transcript into archive/<slug>, preserving content, removing sou
     archiveDir,
   });
 
-  assert.equal(fs.existsSync(src), false, "source should be gone (moved)");
+  assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n", "content preserved");
   assert.equal(dest, path.join(archiveDir, "proj", "session.jsonl"));
 });
@@ -105,7 +105,7 @@ test("archives on Windows when directory fsync is unavailable", () => {
     });
   });
 
-  assert.equal(fs.existsSync(src), false, "source should be archived");
+  assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
 });
 
@@ -145,7 +145,7 @@ test("uses a writable archive descriptor for Windows file sync", () => {
       archiveDir,
     });
 
-    assert.equal(fs.existsSync(src), false, "source should be archived");
+    assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
     assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
   } finally {
     fs.openSync = originalOpenSync;
@@ -183,7 +183,7 @@ test("tolerates an archive slug directory created concurrently", () => {
 });
 
 test(
-  "syncs newly created archive directory entries before source removal",
+  "syncs newly created archive directory entries before marking the destination ready",
   { skip: process.platform === "win32" },
   () => {
     const { root, src } = setup();
@@ -195,7 +195,6 @@ test(
     const originalOpenSync = fs.openSync;
     const originalFsyncSync = fs.fsyncSync;
     const originalMkdirSync = fs.mkdirSync;
-    const originalUnlinkSync = fs.unlinkSync;
     let slugCreatedConcurrently = false;
 
     fs.openSync = ((pathname, flags, mode) => {
@@ -220,88 +219,54 @@ test(
       }
       return originalMkdirSync(pathname, options);
     }) as typeof fs.mkdirSync;
-    fs.unlinkSync = ((pathname) => {
-      if (pathname === src) {
-        for (const parent of expectedParents) {
-          assert.equal(
-            syncedDirectories.has(parent),
-            true,
-            `${parent} must be synced before removing the source`,
-          );
-        }
-      }
-      return originalUnlinkSync(pathname);
-    }) as typeof fs.unlinkSync;
-
     try {
       archiveTranscript({
         transcriptPath: src,
         slug: "proj",
         projectsDir: path.join(root, "projects"),
         archiveDir,
+        onDestinationReady: () => {
+          for (const parent of expectedParents) {
+            assert.equal(
+              syncedDirectories.has(parent),
+              true,
+              `${parent} must be synced before marking the destination ready`,
+            );
+          }
+        },
       });
     } finally {
       fs.openSync = originalOpenSync;
       fs.fsyncSync = originalFsyncSync;
       fs.mkdirSync = originalMkdirSync;
-      fs.unlinkSync = originalUnlinkSync;
     }
   },
 );
 
-test(
-  "syncs the source directory after source removal",
-  { skip: process.platform === "win32" },
-  () => {
-    const { root, src } = setup();
-    const projectSlugDir = path.dirname(src);
-    const archiveDir = path.join(root, ".transcript-archive");
-    const directoryDescriptors = new Map<number, string>();
-    const originalOpenSync = fs.openSync;
-    const originalFsyncSync = fs.fsyncSync;
-    const originalUnlinkSync = fs.unlinkSync;
-    let sourceUnlinked = false;
-    let sourceDirectorySynced = false;
+test("does not unlink the source after publishing an archive copy", () => {
+  const { root, src } = setup();
+  const originalUnlinkSync = fs.unlinkSync;
+  let sourceUnlinked = false;
 
-    fs.openSync = ((pathname, flags, mode) => {
-      const descriptor = originalOpenSync(pathname, flags, mode);
-      if (
-        typeof flags === "number" &&
-        (flags & fs.constants.O_DIRECTORY) !== 0
-      ) {
-        directoryDescriptors.set(descriptor, path.resolve(pathname.toString()));
-      }
-      return descriptor;
-    }) as typeof fs.openSync;
-    fs.fsyncSync = ((descriptor: number) => {
-      if (directoryDescriptors.get(descriptor) === projectSlugDir) {
-        assert.equal(sourceUnlinked, true);
-        sourceDirectorySynced = true;
-      }
-      return originalFsyncSync(descriptor);
-    }) as typeof fs.fsyncSync;
-    fs.unlinkSync = ((pathname) => {
-      const result = originalUnlinkSync(pathname);
-      if (pathname === src) sourceUnlinked = true;
-      return result;
-    }) as typeof fs.unlinkSync;
+  fs.unlinkSync = ((pathname) => {
+    if (pathname === src) sourceUnlinked = true;
+    return originalUnlinkSync(pathname);
+  }) as typeof fs.unlinkSync;
 
-    try {
-      archiveTranscript({
-        transcriptPath: src,
-        slug: "proj",
-        projectsDir: path.join(root, "projects"),
-        archiveDir,
-      });
+  try {
+    archiveTranscript({
+      transcriptPath: src,
+      slug: "proj",
+      projectsDir: path.join(root, "projects"),
+      archiveDir: path.join(root, ".transcript-archive"),
+    });
+  } finally {
+    fs.unlinkSync = originalUnlinkSync;
+  }
 
-      assert.equal(sourceDirectorySynced, true);
-    } finally {
-      fs.openSync = originalOpenSync;
-      fs.fsyncSync = originalFsyncSync;
-      fs.unlinkSync = originalUnlinkSync;
-    }
-  },
-);
+  assert.equal(sourceUnlinked, false);
+  assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
+});
 
 test("collision gets a numeric suffix, never overwrites", () => {
   const { root, src } = setup();
@@ -326,7 +291,7 @@ test("collision gets a numeric suffix, never overwrites", () => {
   assert.equal(fs.readFileSync(dest, "utf8"), "PAYLOAD\n");
 });
 
-test("reserves only the collision-safe destination in the ledger callback", () => {
+test("records each planned destination before collision-safe publication", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
   const existing = path.join(archiveDir, "proj", "session.jsonl");
@@ -343,12 +308,13 @@ test("reserves only the collision-safe destination in the ledger callback", () =
   });
 
   assert.deepEqual(reserved, [
+    path.join(archiveDir, "proj", "session.jsonl"),
     path.join(archiveDir, "proj", "session.dup1.jsonl"),
   ]);
   assert.equal(fs.readFileSync(existing, "utf8"), "EXISTING\n");
 });
 
-test("records an archive destination after publishing its payload", () => {
+test("records a planned archive destination before publishing its link", () => {
   const { root, src } = setup();
   let reserved = false;
   let ready = false;
@@ -360,7 +326,7 @@ test("records an archive destination after publishing its payload", () => {
     archiveDir: path.join(root, ".transcript-archive"),
     onDestinationReserved: (destination) => {
       reserved = true;
-      assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
+      assert.equal(fs.existsSync(destination), false);
       assert.equal(fs.existsSync(src), true);
     },
     onDestinationReady: (destination) => {
@@ -372,7 +338,7 @@ test("records an archive destination after publishing its payload", () => {
 
   assert.equal(reserved, true);
   assert.equal(ready, true);
-  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.existsSync(src), true);
 });
 
 test("keeps the source when final archive sync fails", () => {
@@ -483,7 +449,7 @@ test("preserves a destination created while publishing", () => {
   assert.equal(fs.readFileSync(destination, "utf8"), "UNRELATED\n");
   assert.equal(archived, path.join(archiveDir, "proj", "session.dup1.jsonl"));
   assert.equal(fs.readFileSync(archived, "utf8"), "PAYLOAD\n");
-  assert.equal(fs.existsSync(src), false);
+  assert.equal(fs.existsSync(src), true);
 });
 
 test("keeps the source when the staging payload changes while publishing", () => {
@@ -522,28 +488,29 @@ test("keeps the source when the staging payload changes while publishing", () =>
   assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
 });
 
-test("preserves a destination replaced after reservation", () => {
+test("preserves a destination created after reservation", () => {
   const { root, src } = setup();
   const archiveDir = path.join(root, ".transcript-archive");
   const destination = path.join(archiveDir, "proj", "session.jsonl");
+  let created = false;
 
-  assert.throws(
-    () =>
-      archiveTranscript({
-        transcriptPath: src,
-        slug: "proj",
-        projectsDir: path.join(root, "projects"),
-        archiveDir,
-        onDestinationReserved: (reserved) => {
-          fs.unlinkSync(reserved);
-          fs.writeFileSync(reserved, "UNRELATED\n");
-        },
-      }),
-    /archive destination changed during publishing/,
-  );
+  const archived = archiveTranscript({
+    transcriptPath: src,
+    slug: "proj",
+    projectsDir: path.join(root, "projects"),
+    archiveDir,
+    onDestinationReserved: (reserved) => {
+      if (!created) {
+        created = true;
+        fs.writeFileSync(reserved, "UNRELATED\n");
+      }
+    },
+  });
 
+  assert.equal(created, true);
   assert.equal(fs.readFileSync(destination, "utf8"), "UNRELATED\n");
   assert.equal(fs.readFileSync(src, "utf8"), "PAYLOAD\n");
+  assert.equal(archived, path.join(archiveDir, "proj", "session.dup1.jsonl"));
 });
 
 test("preserves a destination replaced when the ready callback fails", () => {
@@ -588,26 +555,24 @@ test("keeps the source when its reviewed fingerprint does not match", () => {
   assert.equal(fs.existsSync(src), true);
 });
 
-test("does not remove a source path replaced during archiving", () => {
+test("archives the validated source version without changing a replaced source path", () => {
   const { root, src } = setup();
   const replacement = `${src}.original`;
   const outside = path.join(root, "outside.jsonl");
   fs.writeFileSync(outside, "OUTSIDE\n");
 
-  assert.throws(
-    () =>
-      archiveTranscript({
-        transcriptPath: src,
-        slug: "proj",
-        projectsDir: path.join(root, "projects"),
-        archiveDir: path.join(root, ".transcript-archive"),
-        onDestinationReserved: () => {
-          fs.renameSync(src, replacement);
-          fs.symlinkSync(outside, src);
-        },
-      }),
-    /symbolic link|source changed during archiving/,
-  );
+  const destination = archiveTranscript({
+    transcriptPath: src,
+    slug: "proj",
+    projectsDir: path.join(root, "projects"),
+    archiveDir: path.join(root, ".transcript-archive"),
+    onDestinationReserved: () => {
+      fs.renameSync(src, replacement);
+      fs.symlinkSync(outside, src);
+    },
+  });
+
+  assert.equal(fs.readFileSync(destination, "utf8"), "PAYLOAD\n");
   assert.equal(fs.readFileSync(outside, "utf8"), "OUTSIDE\n");
   assert.equal(fs.readFileSync(replacement, "utf8"), "PAYLOAD\n");
   assert.equal(fs.lstatSync(src).isSymbolicLink(), true);

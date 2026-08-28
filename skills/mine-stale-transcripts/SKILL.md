@@ -107,20 +107,23 @@ After the approved memory write, or after the operator confirms a rejection or l
 node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> <score> <memory-written|proposed-rejected|skipped-low-score> <fingerprint> [memory.md ...]
 ```
 
-The finalizer records a pending archive event before it reserves the archive destination.
-It records that destination before it publishes or synchronizes the archive payload, or removes the source.
+The finalizer records a pending archive event before it plans the archive destination.
+It records that destination before it publishes or synchronizes the archive payload.
 It then writes a completion event.
 It rejects a source whose bytes no longer match the reviewed `fingerprint`.
-If the source changes during archiving, it records an `aborted` attempt and leaves the source for a new score and approval.
+If the archive copy no longer matches the reviewed `fingerprint`, it records an `aborted` attempt and leaves the source for a new score and approval.
 Rescore and obtain approval again when that happens.
-If archive rollback fails, recovery retains the destination-bound pending record until it can verify the destination.
+The finalizer retains the source after it archives the reviewed bytes.
+An unchanged retained source stays excluded from a new proposal.
+A retained source with a new fingerprint returns to score and approval.
+If publication cannot be confirmed, recovery retains the destination-bound pending record until it can verify the destination.
 
 Use the recovery command in step 1 if the command stops before completion.
 Do not run the finalizer against a path outside the configured `projects/<slug>/` directory.
 
 ## Hard rules
 
-- Do not read, write, move, or archive files in an ambiguous account scope.
+- Do not read, write, or archive files in an ambiguous account scope.
 - Do not run a helper without a non-empty `CMK_SCOPE_SLUG_PREFIXES` value.
 - Do not write memory without explicit operator approval.
 - Do not hard-delete transcripts or archives.

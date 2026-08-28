@@ -66,7 +66,7 @@ test("records pending before archiving and archived after completion", () => {
     readLedger(fixture.ledgerFile).map((record) => record.archive_state),
     ["pending", "pending", "pending", "archived"],
   );
-  assert.equal(fs.existsSync(fixture.source), false);
+  assert.equal(fs.existsSync(fixture.source), true);
 });
 
 test("records the destination in pending state before completion", () => {
@@ -113,7 +113,7 @@ test("rejects archive finalization when the reviewed fingerprint changed", () =>
   assert.equal(fs.existsSync(fixture.ledgerFile), false);
 });
 
-test("releases a source for rescoring when it changes during archiving", () => {
+test("records a validated archive and rescores a source changed after publication", () => {
   const fixture = setup();
   const originalLinkSync = fs.linkSync;
   let sourceChanged = false;
@@ -127,29 +127,26 @@ test("releases a source for rescoring when it changes during archiving", () => {
   }) as typeof fs.linkSync;
 
   try {
-    assert.throws(
-      () =>
-        finalizeTranscript({
-          transcriptPath: fixture.source,
-          slug: "proj",
-          score: 14,
-          outcome: "memory-written",
-          memoryWritten: ["memory/lessons.md"],
-          ...fixture,
-          scopePrefixes: ["proj"],
-        }),
-      /source changed during archiving/,
-    );
+    const result = finalizeTranscript({
+      transcriptPath: fixture.source,
+      slug: "proj",
+      score: 14,
+      outcome: "memory-written",
+      memoryWritten: ["memory/lessons.md"],
+      ...fixture,
+      scopePrefixes: ["proj"],
+    });
+    assert.equal(fs.readFileSync(result.archivePath!, "utf8"), "PAYLOAD\n");
   } finally {
     fs.linkSync = originalLinkSync;
   }
 
-  assert.equal(fs.existsSync(fixture.source), true);
+  assert.equal(fs.readFileSync(fixture.source, "utf8"), "PAYLOAD\nRESUMED\n");
   assert.deepEqual(
     readLedger(fixture.ledgerFile).map((record) => record.archive_state),
-    ["pending", "pending", "pending", "aborted"],
+    ["pending", "pending", "pending", "archived"],
   );
-  assert.deepEqual([...minedSessions(fixture.ledgerFile)], []);
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
 });
 
 test(
@@ -279,7 +276,7 @@ test("recovery replaces an empty reserved destination", () => {
   });
 
   assert.equal(result.completed, 1);
-  assert.equal(fs.existsSync(fixture.source), false);
+  assert.equal(fs.existsSync(fixture.source), true);
   assert.equal(
     readLedger(fixture.ledgerFile).at(-1)?.archive_path,
     path.join(fixture.archiveDir, "proj", "session.dup1.jsonl"),
@@ -314,7 +311,7 @@ test("recovery completes a payload published before its ready event", () => {
   });
 
   assert.equal(result.completed, 1);
-  assert.equal(fs.existsSync(fixture.source), false);
+  assert.equal(fs.existsSync(fixture.source), true);
   assert.equal(
     readLedger(fixture.ledgerFile).at(-1)?.archive_path,
     reservedPath,
@@ -380,7 +377,7 @@ test("recovery retains a legacy pending record when its source changed", () => {
   assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
 });
 
-test("recovery aborts a destination-bound attempt when its source changed", () => {
+test("recovery completes a destination-bound archive while a changed source remains", () => {
   const fixture = setup();
   const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");
   fs.mkdirSync(path.dirname(archivePath), { recursive: true });
@@ -407,14 +404,14 @@ test("recovery aborts a destination-bound attempt when its source changed", () =
     scopePrefixes: ["proj"],
   });
 
-  assert.equal(result.completed, 0);
+  assert.equal(result.completed, 1);
   assert.deepEqual(result.unresolved, []);
   assert.deepEqual(
     readLedger(fixture.ledgerFile).map((record) => record.archive_state),
-    ["pending", "aborted"],
+    ["pending", "archived"],
   );
   assert.deepEqual(pendingArchives(fixture.ledgerFile), []);
-  assert.deepEqual([...minedSessions(fixture.ledgerFile)], []);
+  assert.deepEqual([...minedSessions(fixture.ledgerFile)], ["session"]);
   assert.equal(fs.readFileSync(archivePath, "utf8"), "PAYLOAD\n");
   assert.equal(fs.readFileSync(fixture.source, "utf8"), "PAYLOAD\nRESUMED\n");
 });
@@ -621,7 +618,7 @@ test("recovery rejects a recorded archive below a symlinked archive slug", () =>
   assert.equal(readLedger(fixture.ledgerFile).at(-1)?.archive_state, "pending");
 });
 
-test("recovery reuses a recorded archive before removing a duplicate source", () => {
+test("recovery reuses a recorded archive while retaining a duplicate source", () => {
   const fixture = setup();
   const archivePath = path.join(fixture.archiveDir, "proj", "session.jsonl");
   fs.mkdirSync(path.dirname(archivePath), { recursive: true });
@@ -647,7 +644,7 @@ test("recovery reuses a recorded archive before removing a duplicate source", ()
   });
 
   assert.equal(result.completed, 1);
-  assert.equal(fs.existsSync(fixture.source), false);
+  assert.equal(fs.existsSync(fixture.source), true);
   assert.equal(fs.existsSync(`${archivePath}.dup1`), false);
   assert.equal(
     readLedger(fixture.ledgerFile).at(-1)?.archive_path,

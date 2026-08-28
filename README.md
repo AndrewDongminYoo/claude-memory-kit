@@ -11,7 +11,7 @@ Every transcript command requires `CMK_SCOPE_SLUG_PREFIXES` with one or more com
 export CMK_SCOPE_SLUG_PREFIXES="<approved-slug-prefix-1>,<approved-slug-prefix-2>"
 ```
 
-An absent or empty value fails closed before the command scans, scores, moves, or records a transcript.
+An absent or empty value fails closed before the command scans, scores, archives, or records a transcript.
 
 ## Requirements
 
@@ -46,13 +46,17 @@ read-only    read-only         selected     required            agent-owned     
 4. The operator approves, edits, or rejects each proposal before any memory write.
 5. `finalize-transcript` records a pending event.
    It stages and synchronizes the archive payload.
+   It records the planned destination before it publishes the hard link.
    It publishes that payload with exclusive hard-link creation.
    It records the destination state.
    It completes finalization only for a validated main-session transcript.
 
 Every finalization requires the SHA-256 `fingerprint` emitted by `score-prefilter`.
 If the transcript bytes differ, score and review the current transcript again.
-If the source changes during archiving, the finalizer records an `aborted` attempt and leaves the source available for a new score and approval.
+If the archive copy no longer matches the reviewed fingerprint, the finalizer records an `aborted` attempt and leaves the source available for a new score and approval.
+The finalizer retains the source after it archives the reviewed bytes.
+An unchanged retained source remains excluded from a new proposal.
+A retained source with a new fingerprint returns to score and approval.
 
 An interrupted finalization can be resumed without another memory write.
 If publication cannot be confirmed, recovery retains its pending attempt until it can verify and synchronize the archive.
@@ -76,9 +80,8 @@ An unreadable ledger event is an audit record and does not exclude the transcrip
 - Archive paths must remain under the configured Claude root.
 - The archive rejects traversal, source paths outside `projects/<slug>/`, and symbolic links.
 - Archive destinations use exclusive hard-link creation and preserve existing files with a numeric suffix.
-- The source remains until the archive payload exists.
-- Only `finalize-transcript` can remove an archivable source.
-- The ledger is append-only and excludes pending and completed archivable sessions from new proposals.
+- The finalizer retains the source after it publishes an archive payload.
+- The ledger is append-only and excludes pending sessions and unchanged archived sources from new proposals.
 - Ledger reads and writes reject symbolic-link path components and use one verified descriptor for repair and append.
 - An `aborted` archive attempt releases only its matching transcript version for another score and approval.
 - Automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture and never reads or changes the operator's real `~/.claude` data.

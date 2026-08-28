@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isSlugInScope, readSafeTranscriptFile } from "./scope.ts";
+import { fingerprintDescriptor } from "./fingerprint.ts";
+import {
+  isSlugInScope,
+  openSafeTranscriptFile,
+  readSafeTranscriptFile,
+} from "./scope.ts";
 import { ageBasisMs } from "./timestamps.ts";
 
 const DAY_MS = 86_400_000;
@@ -18,6 +23,7 @@ export interface Candidate {
 export interface ScanOptions {
   projectsDir: string;
   minedSessions: Set<string>;
+  minedFingerprints?: ReadonlyMap<string, string>;
   coldDays: number;
   now: number;
   /** Explicit allowlist applied before transcript directories are read. */
@@ -28,6 +34,28 @@ export interface ScanOptions {
    * worktree config dirs where mtime was bulk-reset; costs one file read each.
    */
   useInternalTimestamps?: boolean;
+}
+
+function hasChangedMinedSource(
+  transcriptPath: string,
+  slug: string,
+  projectsDir: string,
+  archivedFingerprint: string,
+): boolean {
+  try {
+    const descriptor = openSafeTranscriptFile(
+      transcriptPath,
+      slug,
+      projectsDir,
+    );
+    try {
+      return fingerprintDescriptor(descriptor) !== archivedFingerprint;
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -41,6 +69,7 @@ export function scanCold(opts: ScanOptions): Candidate[] {
   const {
     projectsDir,
     minedSessions,
+    minedFingerprints,
     coldDays,
     now,
     scopePrefixes,
@@ -93,7 +122,14 @@ export function scanCold(opts: ScanOptions): Candidate[] {
       const ageDays = (now - basisMs) / DAY_MS;
       if (ageDays < coldDays) continue; // still warm
       const session_id = entry.slice(0, -".jsonl".length);
-      if (minedSessions.has(session_id)) continue; // already mined
+      const archivedFingerprint = minedFingerprints?.get(session_id);
+      if (
+        minedSessions.has(session_id) &&
+        (!archivedFingerprint ||
+          !hasChangedMinedSource(full, slug, projectsDir, archivedFingerprint))
+      ) {
+        continue;
+      }
 
       out.push({
         session_id,

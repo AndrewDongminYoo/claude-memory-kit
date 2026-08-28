@@ -29,7 +29,7 @@ The repository must state that `COLD_DAYS` defaults to 14.
 
 Every transcript CLI requires a non-empty `CMK_SCOPE_SLUG_PREFIXES` value.
 The value is a comma-separated allowlist of approved project-slug prefixes.
-An absent or empty value must fail closed before any transcript is read, written, moved, or recorded.
+An absent or empty value must fail closed before any transcript is read, written, archived, or recorded.
 The scanner must apply the allowlist before it opens a transcript file.
 The prefilter and finalizers must reject an input slug outside the allowlist.
 Recovery must leave pending records outside the allowlist unchanged and report their skip count.
@@ -38,18 +38,19 @@ Recovery must leave pending records outside the allowlist unchanged and report t
 
 `scan-cold` remains read-only.
 `score-prefilter` remains read-only.
-Only `finalize-transcript` can remove an archivable source.
+`finalize-transcript` retains an archivable source after it writes an archive copy.
 
 An approved transcript moves through this state sequence:
 
 ```plaintext
-pending archive record -> staged archive payload -> destination-bound pending record -> synchronized archive -> completed archive record
-pending archive record -> source version change -> aborted archive record -> score and approval
+pending archive record -> staged archive payload -> destination-bound pending record -> published archive copy -> synchronized archive -> completed archive record
+pending archive record -> archive copy fingerprint change -> aborted archive record -> score and approval
+published archive copy -> source version change -> completed archive record -> score and approval
 published archive with failed synchronization -> destination-bound pending record -> recovery
 ```
 
 The initial record prevents a later scan from proposing the same transcript again.
-The destination-bound pending record records an archive path after the archive payload is published.
+The destination-bound pending record records an archive path before the finalizer publishes that path.
 A recovery command completes a pending archive without repeating memory extraction or memory writes.
 An aborted record closes only the matching pending attempt and allows a changed source to be scored and approved again.
 Recovery never removes a published destination.
@@ -65,7 +66,7 @@ The archive operation must enforce all of these requirements:
 - Preserve existing archive files without overwriting them.
 - Allocate a collision suffix through an exclusive hard-link creation step.
 - Do not overwrite or remove a published archive destination.
-- Keep the source until the archive payload is complete.
+- Retain the source after the archive payload is complete.
 - Leave malformed transcripts in place with the `unreadable` outcome only after the reviewed raw-byte fingerprint still matches.
 
 ## Ledger contract
@@ -76,11 +77,12 @@ Ledger reads and writes reject symbolic-link directory or file paths.
 Repairs and appends use one verified descriptor for the ledger file.
 
 `minedSessions` treats pending and completed records as excluded from new memory proposals.
+The scanner allows a retained completed source to return only when its current fingerprint differs from the latest archived fingerprint and no archive attempt is pending.
 An `unreadable` record is an audit event and does not exclude the source from a later rescore.
 An aborted record releases only the matching attempt.
 `pendingArchives` returns the latest pending record for each attempt.
 The recovery command resolves a pending record only when its source remains in the validated project path or its archive destination already exists.
-It synchronizes a recorded archive before it removes a duplicate source.
+It synchronizes a recorded archive while it retains the source.
 It must otherwise report an error and leave the record unchanged.
 
 ## Malformed transcript contract
@@ -100,7 +102,7 @@ It runs the compiled scan and score commands with `node`.
 It validates the plugin and marketplace metadata with the installed Claude Code CLI when that CLI is available.
 
 All automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture.
-Automated verification must not read, write, move, or archive files in the operator's real `~/.claude` directory.
+Automated verification must not read, write, or archive files in the operator's real `~/.claude` directory.
 It must provide an explicit temporary-fixture scope to every transcript CLI it runs.
 
 The automated test suite must cover path traversal rejection, source containment, collision handling, unreadable JSONL, pending archive recovery, Windows path grouping, duplicate score input, and invalid project caps.

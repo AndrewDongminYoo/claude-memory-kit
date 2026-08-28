@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fingerprintContents } from "./fingerprint.ts";
 import { scanCold } from "./scan.ts";
 
 const DAY_MS = 86_400_000;
@@ -74,6 +75,27 @@ test("already-mined sessions are excluded", () => {
   assert.deepEqual(
     c.map((x) => x.session_id),
     ["old2"],
+  );
+});
+
+test("rescores a retained source when its archived fingerprint changed", () => {
+  const dir = fixture([["p", "old1", 40]]);
+  const transcript = path.join(dir, "p", "old1.jsonl");
+  fs.writeFileSync(transcript, "RESUMED\n");
+  const oldFingerprint = fingerprintContents(Buffer.from("{}\n"));
+
+  const candidates = scanCold({
+    projectsDir: dir,
+    minedSessions: new Set(["old1"]),
+    minedFingerprints: new Map([["old1", oldFingerprint]]),
+    coldDays: 30,
+    now: NOW,
+    scopePrefixes: TEST_SCOPE,
+  });
+
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.session_id),
+    ["old1"],
   );
 });
 

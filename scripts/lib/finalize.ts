@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { archiveTranscript, TranscriptVersionChangedError } from "./archive.ts";
+import {
+  archiveTranscript,
+  synchronizeVerifiedArchive,
+  TranscriptVersionChangedError,
+} from "./archive.ts";
 import {
   fingerprintDescriptor,
   isTranscriptFingerprint,
@@ -297,16 +301,12 @@ export function recoverPendingArchives(
           });
           continue;
         } else {
-          if (fs.existsSync(record.transcript_path)) {
-            archiveTranscript({
-              transcriptPath: record.transcript_path,
-              slug: record.slug,
-              projectsDir: options.projectsDir,
-              archiveDir: options.archiveDir,
-              expectedFingerprint,
-              existingArchivePath: recordedArchivePath,
-            });
-          }
+          synchronizeVerifiedArchive(
+            recordedArchivePath,
+            record.slug,
+            options.archiveDir,
+            expectedFingerprint,
+          );
           appendCompletedArchive(
             options.ledgerFile,
             completionRecord(record, recordedArchivePath, options.now, true),

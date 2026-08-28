@@ -4,7 +4,7 @@
 
 **Goal:** Ship one safe, manual transcript-mining skill that runs from a marketplace cache without a global `tsx` dependency.
 
-**Architecture:** Compile the deterministic TypeScript helpers into tracked `dist/` JavaScript and run them with an explicit Node.js runtime requirement. Require an explicit project-slug scope before any transcript operation. Keep candidate discovery read-only. Add a stateful finalization boundary that records a pending archive, moves only a validated main-session transcript without clobbering an existing archive, and records completion. A recovery command completes an interrupted finalization without re-mining a transcript.
+**Architecture:** Compile the deterministic TypeScript helpers into tracked `dist/` JavaScript and run them with an explicit Node.js runtime requirement. Require an explicit project-slug scope before any transcript operation. Keep candidate discovery read-only. Add a stateful finalization boundary that records a pending archive, copies a validated main-session transcript without clobbering an existing archive, and records completion. A recovery command completes an interrupted finalization without re-mining a transcript.
 
 **Tech Stack:** Node.js 22.23.2+, TypeScript 5.9, `node:test`, pnpm, Claude Code plugin metadata.
 
@@ -207,7 +207,7 @@ Expected: FAIL because archive state and recovery do not exist.
 
 Add `pending` and `archived` archive states without modifying old ledger entries.
 Write a pending event before the archive operation.
-Write a destination-bound pending event from `onDestinationReady` before `archiveTranscript` removes the source.
+Write a destination-bound pending event from `onDestinationReserved` before `archiveTranscript` publishes the archive copy.
 Write an archived event only after that pending event exists.
 Make recovery archive a still-present validated source or append completion when the recorded destination already exists.
 Report unresolved pending records without modifying them.

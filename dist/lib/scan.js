@@ -1,8 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isSlugInScope, readSafeTranscriptFile } from "./scope.js";
+import { fingerprintDescriptor } from "./fingerprint.js";
+import { isSlugInScope, openSafeTranscriptFile, readSafeTranscriptFile, } from "./scope.js";
 import { ageBasisMs } from "./timestamps.js";
 const DAY_MS = 86_400_000;
+function hasChangedMinedSource(transcriptPath, slug, projectsDir, archivedFingerprint) {
+    try {
+        const descriptor = openSafeTranscriptFile(transcriptPath, slug, projectsDir);
+        try {
+            return fingerprintDescriptor(descriptor) !== archivedFingerprint;
+        }
+        finally {
+            fs.closeSync(descriptor);
+        }
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * List cold, un-mined transcripts under <projectsDir>/<slug>/*.jsonl.
  *
@@ -11,7 +26,7 @@ const DAY_MS = 86_400_000;
  * the internal session time and mtime (reads the file); otherwise mtime only.
  */
 export function scanCold(opts) {
-    const { projectsDir, minedSessions, coldDays, now, scopePrefixes, useInternalTimestamps, } = opts;
+    const { projectsDir, minedSessions, minedFingerprints, coldDays, now, scopePrefixes, useInternalTimestamps, } = opts;
     if (!fs.existsSync(projectsDir))
         return [];
     const projectsStat = fs.lstatSync(projectsDir);
@@ -66,8 +81,12 @@ export function scanCold(opts) {
             if (ageDays < coldDays)
                 continue; // still warm
             const session_id = entry.slice(0, -".jsonl".length);
-            if (minedSessions.has(session_id))
-                continue; // already mined
+            const archivedFingerprint = minedFingerprints?.get(session_id);
+            if (minedSessions.has(session_id) &&
+                (!archivedFingerprint ||
+                    !hasChangedMinedSource(full, slug, projectsDir, archivedFingerprint))) {
+                continue;
+            }
             out.push({
                 session_id,
                 slug,

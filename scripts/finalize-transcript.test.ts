@@ -180,7 +180,8 @@ test("uses the supplied reviewed fingerprint for archivable finalization", () =>
   );
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(fs.existsSync(source), false);
+  assert.equal(fs.existsSync(source), true);
+  assert.equal(fs.readFileSync(source, "utf8"), contents);
 });
 
 test("rejects an out-of-scope transcript before writing a ledger record", () => {

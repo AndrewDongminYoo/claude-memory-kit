@@ -197,6 +197,32 @@ export function minedSessions(file: string): Set<string> {
   ]);
 }
 
+/** Latest archived source fingerprint for sessions without a pending attempt. */
+export function archivedSourceFingerprints(file: string): Map<string, string> {
+  const fingerprints = new Map<string, string>();
+  const pending = new Map<string, Set<string>>();
+  for (const { record } of readLedgerEvents(file)) {
+    const key = archiveAttemptKey(record);
+    if (record.archive_state === "pending") {
+      const attempts = pending.get(record.session_id) ?? new Set<string>();
+      attempts.add(key);
+      pending.set(record.session_id, attempts);
+    } else if (
+      record.archive_state === "archived" &&
+      isTranscriptFingerprint(record.source_fingerprint)
+    ) {
+      fingerprints.set(record.session_id, record.source_fingerprint);
+      pending.get(record.session_id)?.delete(key);
+    } else if (record.archive_state === "aborted" && record.attempt_id) {
+      pending.get(record.session_id)?.delete(key);
+    }
+  }
+  for (const [sessionId, attempts] of pending) {
+    if (attempts.size > 0) fingerprints.delete(sessionId);
+  }
+  return fingerprints;
+}
+
 function syncDirectory(pathname: string): void {
   if (process.platform === "win32") {
     return;

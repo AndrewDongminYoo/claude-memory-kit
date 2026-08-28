@@ -178,11 +178,6 @@ function syncDirectory(pathname: string): void {
   }
 }
 
-function removeSource(source: string, projectSlugDir: string): void {
-  fs.unlinkSync(source);
-  syncDirectory(projectSlugDir);
-}
-
 function assertResolvedDirectChild(
   root: string,
   child: string,
@@ -233,6 +228,7 @@ function publishDestination(
     const name = destinationName(base, suffix);
     const destination = path.join(destinationDir, name);
     assertStagingPayload(temporaryPath, staging);
+    onDestinationReserved?.(destination);
     try {
       fs.linkSync(temporaryPath, destination);
     } catch (error) {
@@ -241,7 +237,6 @@ function publishDestination(
       }
       continue;
     }
-    onDestinationReserved?.(destination);
     assertPublishedDestination(destination, staging);
     syncDirectory(destinationDir);
     assertPublishedDestination(destination, staging);
@@ -261,15 +256,79 @@ function assertUnchangedPrivateDirectory(
   }
 }
 
-function assertUnchangedSource(source: string, sourceStat: fs.Stats): void {
-  if (!sameFile(sourceStat, assertFile(source, "transcript source"))) {
-    throw new TranscriptVersionChangedError("source changed during archiving");
+/** Synchronize an already published archive without reading its current source. */
+export function synchronizeVerifiedArchive(
+  archivePath: string,
+  slug: string,
+  archiveDir: string,
+  expectedFingerprint: string,
+): void {
+  const archiveRoot = path.resolve(archiveDir);
+  const destination = path.resolve(archivePath);
+  assertSingleSegmentSlug(slug);
+  if (!isTranscriptFingerprint(expectedFingerprint)) {
+    throw new Error(
+      "archive requires a reviewed fingerprint with a SHA-256 digest",
+    );
+  }
+  const archiveSlugDir = path.join(archiveRoot, slug);
+  if (path.dirname(destination) !== archiveSlugDir) {
+    throw new Error(
+      "existing archive must be a direct child of the archive slug directory",
+    );
+  }
+  assertPrivateDirectory(path.dirname(archiveRoot), "archive directory parent");
+  const archiveRootStat = assertPrivateDirectory(
+    archiveRoot,
+    "archive directory",
+  );
+  const archiveSlugStat = assertPrivateDirectory(
+    archiveSlugDir,
+    "archive slug directory",
+  );
+  assertResolvedDirectChild(
+    archiveRoot,
+    archiveSlugDir,
+    "archive slug directory",
+  );
+  const destinationStat = assertFile(destination, "existing archive");
+  assertResolvedDirectChild(archiveSlugDir, destination, "existing archive");
+  const descriptor = fs.openSync(
+    destination,
+    fs.constants.O_RDWR | fs.constants.O_NOFOLLOW,
+  );
+  try {
+    if (!sameFile(destinationStat, fs.fstatSync(descriptor))) {
+      throw new Error("existing archive changed during synchronization");
+    }
+    if (fingerprintDescriptor(descriptor) !== expectedFingerprint) {
+      throw new Error(
+        "existing archive does not match the reviewed fingerprint",
+      );
+    }
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  syncDirectory(archiveSlugDir);
+  assertUnchangedPrivateDirectory(
+    archiveRoot,
+    archiveRootStat,
+    "archive directory",
+  );
+  assertUnchangedPrivateDirectory(
+    archiveSlugDir,
+    archiveSlugStat,
+    "archive slug directory",
+  );
+  if (!sameFile(destinationStat, assertFile(destination, "existing archive"))) {
+    throw new Error("existing archive changed during synchronization");
   }
 }
 
 /**
- * Moves a direct main-session transcript to a collision-safe archive destination.
- * The source remains in place until the complete archive payload exists.
+ * Copies a direct main-session transcript to a collision-safe archive destination.
+ * The source remains in place.
  */
 export function archiveTranscript(opts: ArchiveOptions): string {
   const projectsRoot = path.resolve(opts.projectsDir);
@@ -371,7 +430,6 @@ export function archiveTranscript(opts: ArchiveOptions): string {
           archiveSlugStat,
           "archive slug directory",
         );
-        assertUnchangedSource(source, sourceStat);
         if (
           !sameFile(
             existingStat,
@@ -387,7 +445,6 @@ export function archiveTranscript(opts: ArchiveOptions): string {
           archiveSlugStat,
           "archive slug directory",
         );
-        removeSource(source, projectSlugDir);
         return existingDestination;
       } finally {
         fs.closeSync(existingDescriptor);
@@ -433,9 +490,6 @@ export function archiveTranscript(opts: ArchiveOptions): string {
           archiveSlugStat,
           "archive slug directory",
         );
-        assertUnchangedSource(source, sourceStat);
-        fs.unlinkSync(source);
-        syncDirectory(projectSlugDir);
         return destination;
       } finally {
         fs.closeSync(temporaryDescriptor);

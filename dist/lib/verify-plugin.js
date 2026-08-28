@@ -190,8 +190,10 @@ export function verifyPluginCopy(pluginRoot, options = {}) {
         const archivePath = finalized.stdout.trim();
         if (!archivePath ||
             !fs.existsSync(archivePath) ||
-            fs.existsSync(transcript)) {
-            throw new Error("compiled finalize-transcript did not archive the fixture");
+            !fs.existsSync(transcript) ||
+            fs.readFileSync(archivePath, "utf8") !==
+                fs.readFileSync(transcript, "utf8")) {
+            throw new Error("compiled finalize-transcript did not preserve the fixture and archive copy");
         }
         requireSuccess(runNode(copyRoot, configRoot, "dist/recover-pending-archives.js", [], verificationEnv), "compiled recover-pending-archives");
         return {

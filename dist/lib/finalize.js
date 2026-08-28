@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { archiveTranscript, TranscriptVersionChangedError } from "./archive.js";
+import { archiveTranscript, synchronizeVerifiedArchive, TranscriptVersionChangedError, } from "./archive.js";
 import { fingerprintDescriptor, isTranscriptFingerprint, } from "./fingerprint.js";
 import { appendLedger, appendAbortedArchive, appendCompletedArchive, appendPendingArchive, pendingArchives, } from "./ledger.js";
 import { assertDirectTranscriptPath, assertSlugInScope, isSingleSegmentSlug, isSlugInScope, openSafeTranscriptFile, } from "./scope.js";
@@ -199,16 +199,7 @@ export function recoverPendingArchives(options) {
                     continue;
                 }
                 else {
-                    if (fs.existsSync(record.transcript_path)) {
-                        archiveTranscript({
-                            transcriptPath: record.transcript_path,
-                            slug: record.slug,
-                            projectsDir: options.projectsDir,
-                            archiveDir: options.archiveDir,
-                            expectedFingerprint,
-                            existingArchivePath: recordedArchivePath,
-                        });
-                    }
+                    synchronizeVerifiedArchive(recordedArchivePath, record.slug, options.archiveDir, expectedFingerprint);
                     appendCompletedArchive(options.ledgerFile, completionRecord(record, recordedArchivePath, options.now, true));
                     result.completed += 1;
                     continue;

@@ -1,5 +1,5 @@
 import { resolveClaudeRoot, projectsDir, ledgerPath } from "./lib/paths.ts";
-import { minedSessions } from "./lib/ledger.ts";
+import { archivedSourceFingerprints, minedSessions } from "./lib/ledger.ts";
 import { scanCold } from "./lib/scan.ts";
 import { parseScopeSlugPrefixes } from "./lib/scope.ts";
 
@@ -26,9 +26,11 @@ function main(): void {
     throw new Error(`invalid COLD_DAYS: ${process.env.COLD_DAYS}`);
   }
   const root = resolveClaudeRoot();
+  const ledger = ledgerPath(root);
   const opts = {
     projectsDir: projectsDir(root),
-    minedSessions: minedSessions(ledgerPath(root)),
+    minedSessions: minedSessions(ledger),
+    minedFingerprints: archivedSourceFingerprints(ledger),
     coldDays,
     now: Date.now(),
     scopePrefixes,

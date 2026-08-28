@@ -10,6 +10,7 @@ import {
   appendCompletedArchive,
   appendPendingArchive,
   appendAbortedArchive,
+  archivedSourceFingerprints,
   pendingArchives,
   type LedgerRecord,
 } from "./ledger.ts";
@@ -133,6 +134,49 @@ test("records unreadable outcomes without excluding a later rescore", () => {
   );
 
   assert.deepEqual([...minedSessions(f)], []);
+});
+
+test("returns the latest archived fingerprint when no archive attempt is pending", () => {
+  const f = path.join(tmpDir(), "l.jsonl");
+  appendCompletedArchive(
+    f,
+    rec({
+      session_id: "retained",
+      archive_state: "archived",
+      transcript_path: "/fixture/projects/proj/retained.jsonl",
+      archive_path: "/fixture/archive/proj/retained.jsonl",
+      source_fingerprint: "a".repeat(64),
+      attempt_id: "first",
+    }),
+  );
+  appendPendingArchive(
+    f,
+    rec({
+      session_id: "retained",
+      archive_state: "pending",
+      transcript_path: "/fixture/projects/proj/retained.jsonl",
+      source_fingerprint: "b".repeat(64),
+      attempt_id: "second",
+    }),
+  );
+
+  assert.deepEqual(archivedSourceFingerprints(f), new Map());
+
+  appendAbortedArchive(
+    f,
+    rec({
+      session_id: "retained",
+      archive_state: "aborted",
+      transcript_path: "/fixture/projects/proj/retained.jsonl",
+      source_fingerprint: "b".repeat(64),
+      attempt_id: "second",
+    }),
+  );
+
+  assert.deepEqual(
+    archivedSourceFingerprints(f),
+    new Map([["retained", "a".repeat(64)]]),
+  );
 });
 
 test("syncs new ledger directories and the new ledger file before returning", () => {

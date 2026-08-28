@@ -328,10 +328,12 @@ export function verifyPluginCopy(
     if (
       !archivePath ||
       !fs.existsSync(archivePath) ||
-      fs.existsSync(transcript)
+      !fs.existsSync(transcript) ||
+      fs.readFileSync(archivePath, "utf8") !==
+        fs.readFileSync(transcript, "utf8")
     ) {
       throw new Error(
-        "compiled finalize-transcript did not archive the fixture",
+        "compiled finalize-transcript did not preserve the fixture and archive copy",
       );
     }
     requireSuccess(

@@ -42,8 +42,9 @@ Helpers own deterministic file and ledger behavior.
 - Every transcript CLI requires non-empty `CMK_SCOPE_SLUG_PREFIXES` and fails closed without it.
 - Scanner filtering occurs before a transcript file is read.
 - Scan and score are read-only.
-- A source transcript remains until a complete archive destination exists.
+- A source transcript remains after finalization completes.
 - Unreadable transcripts are ledgered but never archived.
-- Pending and archived ledger events both prevent another memory proposal for that session.
+- Pending ledger events and unchanged archived sources prevent another memory proposal for that session.
+- A retained source with a changed archived fingerprint returns to score and approval.
 - Tests and plugin verification must use a temporary `CLAUDE_CONFIG_DIR` fixture.
 - Never run an automated test or smoke check against the operator's real `~/.claude` directory.
