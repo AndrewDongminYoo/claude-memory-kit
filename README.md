@@ -24,8 +24,11 @@ This repository is its own Claude Code plugin marketplace.
 
 ```log
 /plugin marketplace add AndrewDongminYoo/claude-memory-kit
-/plugin install claude-memory-kit@claude-memory-kit
+/plugin install memory-kit@claude-memory-kit
 ```
+
+The plugin ID is `memory-kit`; the marketplace and repository remain `claude-memory-kit`.
+Start the installed workflow with `/memory-kit:mine-stale-transcripts`.
 
 For local development, load the plugin directory directly.
 

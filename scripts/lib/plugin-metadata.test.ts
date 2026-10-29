@@ -24,6 +24,15 @@ test("plugin metadata declares only the implemented skill", () => {
   const manifest = readJson(".claude-plugin/plugin.json");
   const marketplace = readJson(".claude-plugin/marketplace.json");
   const packageJson = readJson("package.json");
+  assert.equal(manifest.name, "memory-kit");
+  assert.equal(marketplace.name, "claude-memory-kit");
+  assert.equal(packageJson.name, "claude-memory-kit");
+  assert.deepEqual(
+    (marketplace.plugins as Array<Record<string, unknown>>).map(
+      (plugin) => plugin.name,
+    ),
+    ["memory-kit"],
+  );
   const skillNames = fs
     .readdirSync(path.join(repoRoot, "skills"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -82,6 +91,8 @@ test("published instructions use the implemented Node.js runtime contract", () =
     /merge split-path memory|promote repeated rules/i,
   );
   assert.match(readme, /Node\.js 22\.23\.2 or later/);
+  assert.match(readme, /\/plugin install memory-kit@claude-memory-kit/);
+  assert.match(readme, /\/memory-kit:mine-stale-transcripts/);
   assert.match(readme, /`CMK_SCOPE_SLUG_PREFIXES`/);
   assert.match(skill, /node "\$\{CLAUDE_PLUGIN_ROOT\}\/dist\/scan-cold\.js"/);
   assert.match(skill, /CMK_SCOPE_SLUG_PREFIXES=/);
