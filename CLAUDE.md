@@ -48,3 +48,12 @@ Helpers own deterministic file and ledger behavior.
 - A retained source with a changed archived fingerprint returns to score and approval.
 - Tests and plugin verification must use a temporary `CLAUDE_CONFIG_DIR` fixture.
 - Never run an automated test or smoke check against the operator's real `~/.claude` directory.
+
+## Maintenance Tooling
+
+Use the pnpm version pinned in `package.json`, currently 11.28.9.
+CI retains Node 22.23.2 to check the public runtime floor, while Trunk uses the compatible latest Node 22 patch.
+Run `python3 -B .trunk/configs/tests/test_trufflehog_to_sarif.py` for the separate offline reader regressions.
+The scanner uses `--no-verification --no-update` and retains decoded findings through the project-local SARIF adapter.
+Use `trunk check --all --no-fix` for the approved full maintenance scan and explicit formatter paths.
+The plugin ID is `memory-kit`; preserve the repository, marketplace and ledger-directory names.
