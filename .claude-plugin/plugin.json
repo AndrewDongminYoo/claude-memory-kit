@@ -1,5 +1,5 @@
 {
-  "name": "claude-memory-kit",
+  "name": "memory-kit",
   "version": "0.0.1",
   "description": "A manual workflow for reviewing cold Claude Code transcripts and preserving approved lessons as native Markdown memory.",
   "author": {

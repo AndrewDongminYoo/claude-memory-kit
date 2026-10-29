@@ -7,7 +7,7 @@
   "description": "A manual workflow for reviewing cold Claude Code transcripts and preserving approved lessons as native Markdown memory.",
   "plugins": [
     {
-      "name": "claude-memory-kit",
+      "name": "memory-kit",
       "source": "./",
       "description": "A manual workflow for reviewing cold Claude Code transcripts and preserving approved lessons as native Markdown memory."
     }

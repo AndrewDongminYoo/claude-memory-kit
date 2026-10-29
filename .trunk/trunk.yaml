@@ -12,7 +12,7 @@ plugins:
 # Many linters and tools depend on runtimes - configure them here. (https://docs.trunk.io/runtimes)
 runtimes:
   enabled:
-    - node@22.16.0
+    - node@22.23.4
     - python@3.14.4
 # This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
 lint:
@@ -23,16 +23,33 @@ lint:
     # never part of its chosen toolchain, just newly auto-enabled by the v1.11.0
     # plugin bundle's default JS/TS detection.
     - oxlint
+    - grype
   enabled:
-    - grype@0.110.0
-    - checkov@3.3.8
+    - actionlint@1.7.12
+    - checkov@3.4.0
     - git-diff-check
-    - markdownlint@0.49.1
-    - osv-scanner@2.2.4
-    - prettier@3.9.6
-    - trivy@0.70.0
-    - trufflehog@3.90.13
+    - markdownlint@0.50.0
+    - osv-scanner@2.7.0
+    - pinact@4.1.1!:
+        commands: [lint, upgrade]
+    - prettier@3.9.10
+    - trivy@0.76.1
+    - trufflehog@3.99.7
     - yamllint@1.38.0
+  definitions:
+    - name: pinact
+      commands:
+        - name: upgrade
+          enabled: true
+    - name: trufflehog
+      commands:
+        - name: lint
+          run: trufflehog filesystem --json --fail --no-verification --no-update ${target}
+          direct_configs:
+            - .trunk/configs/trufflehog_to_sarif.py
+          parser:
+            runtime: python
+            run: python3 .trunk/configs/trufflehog_to_sarif.py
 actions:
   enabled:
     - trunk-announce
@@ -41,4 +58,4 @@ actions:
     - trunk-upgrade-available
 tools:
   enabled:
-    - oxfmt@0.61.0
+    - oxfmt@0.75.0
