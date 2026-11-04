@@ -33,7 +33,7 @@ The helpers never call an LLM.
 - `lib/archive.ts` rejects traversal, non-project sources, symbolic links, and destination overwrites.
 - `lib/ledger.ts` stores append-only JSONL events under `.claude-memory-kit/mining-ledger.jsonl`.
 
-The skill owns LLM judgment, transcript evidence, native-memory authoring, and the operator approval gate.
+The skill owns LLM judgment, transcript evidence, native-memory authoring, and the user approval gate.
 Helpers own deterministic file and ledger behavior.
 
 ## Invariants
@@ -47,7 +47,7 @@ Helpers own deterministic file and ledger behavior.
 - Pending ledger events and unchanged archived sources prevent another memory proposal for that session.
 - A retained source with a changed archived fingerprint returns to score and approval.
 - Tests and plugin verification must use a temporary `CLAUDE_CONFIG_DIR` fixture.
-- Never run an automated test or smoke check against the operator's real `~/.claude` directory.
+- Never run an automated test or smoke check against the user's real `~/.claude` directory.
 
 ## Maintenance Tooling
 
