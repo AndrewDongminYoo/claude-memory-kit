@@ -39,7 +39,7 @@ claude --plugin-dir /path/to/claude-memory-kit
 ## Workflow
 
 ```log
-scan-cold -> score-prefilter -> deep read -> operator approval -> native Markdown memory -> finalize archive
+scan-cold -> score-prefilter -> deep read -> user approval -> native Markdown memory -> finalize archive
 read-only    read-only         selected     required            agent-owned            pending -> archived
 ```
 

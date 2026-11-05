@@ -75,7 +75,7 @@ export function isUnreadableTranscript(raw) {
     return parseTranscript(raw).length === 0;
 }
 // --- Signal patterns -------------------------------------------------------
-/** Operator corrections/directives — the strongest memory-worthy signal. */
+/** User corrections/directives — the strongest memory-worthy signal. */
 const CORRECTION = /아니라|아닙니다|하지\s*마세요|하지마세요|하지마|대신에|틀렸|잘못|되돌려|\bactually\b|\binstead\b|\bdon't\b|\bdo not\b|\brevert\b|\bnot that\b|\bwrong\b/gi;
 /** Decision / post-mortem language. */
 const DECISION = /root cause|\bdecided\b|\bdecision\b|turns out|the fix\b|\bgotcha\b|\bTIL\b|\bremember\b|\blesson\b|post-?mortem|the reason|because it|so that we/gi;
@@ -120,7 +120,7 @@ export function scoreEntries(entries) {
     const turns = entries.filter((e) => e.role === "user" || e.role === "assistant").length;
     const toolUses = entries.reduce((n, e) => n + e.toolUses, 0);
     const selfCurated = entries.some((e) => e.writes.some((p) => CURATION_TARGET.test(p)));
-    // Corrections only count from user turns (an operator steering the agent).
+    // Corrections only count from user turns (a user steering the agent).
     const corrections = Math.min(countMatches(userText, CORRECTION), CAPS.correction);
     const decisions = Math.min(countMatches(allText, DECISION), CAPS.decision);
     const honesty = Math.min(countMatches(allText, HONESTY), CAPS.honesty);

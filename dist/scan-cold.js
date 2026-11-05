@@ -38,7 +38,7 @@ function main() {
     process.stderr.write(`${candidates.length} cold un-mined candidate(s) (COLD_DAYS=${coldDays})\n`);
     // Zero candidates is a valid outcome, but it is indistinguishable from a
     // corpus that retention truncates before anything can go cold. Report the
-    // observed age span so the operator can tell the two apart instead of
+    // observed age span so the user can tell the two apart instead of
     // reading silence as "nothing to mine".
     if (candidates.length === 0) {
         const all = scanCold({ ...opts, coldDays: 0 });

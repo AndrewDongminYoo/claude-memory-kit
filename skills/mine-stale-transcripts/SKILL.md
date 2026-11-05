@@ -125,7 +125,7 @@ Do not run the finalizer against a path outside the configured `projects/<slug>/
 
 - Do not read, write, or archive files in an ambiguous account scope.
 - Do not run a helper without a non-empty `CMK_SCOPE_SLUG_PREFIXES` value.
-- Do not write memory without explicit operator approval.
+- Do not write memory without explicit user approval.
 - Do not hard-delete transcripts or archives.
 - Do not treat malformed JSONL as low-score data.
 - Do not bypass a pending archive with a new memory write.

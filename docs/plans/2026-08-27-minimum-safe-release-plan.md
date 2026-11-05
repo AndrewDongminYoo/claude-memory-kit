@@ -19,9 +19,9 @@
 - Do not require a global `tsx` executable or plugin-local `node_modules` at runtime.
 - Use test-driven development for every production behavior change.
 - Use only temporary `CLAUDE_CONFIG_DIR` fixtures for automated tests and smoke checks.
-- Do not read, write, move, or archive an operator's real `~/.claude` files during this implementation.
+- Do not read, write, move, or archive a user's real `~/.claude` files during this implementation.
 - Require non-empty `CMK_SCOPE_SLUG_PREFIXES` for every transcript CLI and filter scanner slugs before transcript reads.
-- Do not commit or publish unless the operator requests it.
+- Do not commit or publish unless the user requests it.
 
 ---
 
@@ -359,7 +359,7 @@ Run: `pnpm run format:check && node --import tsx --test scripts/lib/plugin-metad
 
 Expected: PASS.
 
-### Task 7: Run the release gate and perform an operator-approved dry-run
+### Task 7: Run the release gate and perform an approved dry-run
 
 **Files:**
 
@@ -386,4 +386,4 @@ Expected: The command lists only old, un-mined, main-session transcripts and cha
 
 - [x] **Step 4: Stop before a real home-directory dry-run.**
 
-Ask the operator for separate approval before reading or changing the real `~/.claude` corpus.
+Ask the user for separate approval before reading or changing the real `~/.claude` corpus.

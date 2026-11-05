@@ -6,12 +6,12 @@ Status: accepted (sequencing), living note
 ## What this project is
 
 `claude-memory-kit` is a **plugin** that bundles a set of **on-demand skills** for managing Claude Code's _native_ file-based memory (the `~/.claude/projects/<slug>/memory/*.md` files and their `MEMORY.md` index), plus the surrounding `~/.claude` state.
-It is deliberately **not** hook-based like `claude-mem` or `remember` — the operator manages memory through committed markdown under a `~/.claude` git repo and periodic `gc_config` runs, and wants tooling that works _with_ that native, human-in-the-loop model rather than a passive capture hook.
+It is deliberately **not** hook-based like `claude-mem` or `remember` — memory is managed through committed markdown under a `~/.claude` git repo and periodic `gc_config` runs, and the goal is tooling that works _with_ that native, human-in-the-loop model rather than a passive capture hook.
 
 Form-factor decision: one plugin, several skills, plus a thin shared helper layer that is extracted only when a second skill needs it (see Approach A below).
-This answers the operator's open "skill vs plugin?" question: **plugin bundling skills**, because every component is an agent-driven workflow over the `.claude` filesystem — not a passive hook and not a standalone binary.
+This answers the open "skill vs plugin?" question: **plugin bundling skills**, because every component is an agent-driven workflow over the `.claude` filesystem — not a passive hook and not a standalone binary.
 
-## The six components (operator's original framing)
+## The six components (original framing)
 
 | #   | Component                                                                                         | Classification               | Overlap with existing tooling                                                              |
 | --- | ------------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
@@ -22,7 +22,7 @@ This answers the operator's open "skill vs plugin?" question: **plugin bundling 
 | 5   | Review per-project skills / hooks / settings                                                      | Novel skill (audit)          | none                                                                                       |
 | 6   | Soft-delete `~/.claude` noise into a quarantine dir                                               | Skill                        | explicitly "gc_config과 유사" — extends `gc_config`                                        |
 
-Scope flag: this is six components, and #3 / #6 overlap tooling the operator already has.
+Scope flag: this is six components, and #3 / #6 overlap existing tooling.
 Each component ships as its own spec → plan → implementation cycle; they are not built together.
 #3 and #6 should **extend** `memory-scope` / `gc_config` rather than duplicate them.
 
@@ -34,7 +34,7 @@ Each component ships as its own spec → plan → implementation cycle; they are
 
 ## Sequencing decision
 
-First slice: **#4 — stale-transcript memory mining** (operator's choice, 2026-07-26).
+First slice: **#4 — stale-transcript memory mining** (chosen 2026-07-26).
 Rationale: highest immediate recurring value, concrete and verifiable, and its deterministic helpers (transcript scan, cheap scoring, ledger, archive) are the natural seed for the shared helper layer that #2 / #3 will later reuse.
 
 Primary goal of #4: **knowledge preservation first** — mine cold transcripts for memory-worthy value before removing them; disk reclamation is secondary.
