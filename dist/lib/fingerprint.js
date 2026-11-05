@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
-/** Hash the exact bytes that the operator reviewed. */
+/** Hash the exact bytes that the user reviewed. */
 export function fingerprintContents(contents) {
     return createHash("sha256").update(contents).digest("hex");
 }

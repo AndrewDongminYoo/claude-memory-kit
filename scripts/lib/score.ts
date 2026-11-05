@@ -102,7 +102,7 @@ export function isUnreadableTranscript(raw: string): boolean {
 
 // --- Signal patterns -------------------------------------------------------
 
-/** Operator corrections/directives — the strongest memory-worthy signal. */
+/** User corrections/directives — the strongest memory-worthy signal. */
 const CORRECTION =
   /아니라|아닙니다|하지\s*마세요|하지마세요|하지마|대신에|틀렸|잘못|되돌려|\bactually\b|\binstead\b|\bdon't\b|\bdo not\b|\brevert\b|\bnot that\b|\bwrong\b/gi;
 
@@ -168,7 +168,7 @@ export function scoreEntries(entries: TranscriptEntry[]): ScoreResult {
     e.writes.some((p) => CURATION_TARGET.test(p)),
   );
 
-  // Corrections only count from user turns (an operator steering the agent).
+  // Corrections only count from user turns (a user steering the agent).
   const corrections = Math.min(
     countMatches(userText, CORRECTION),
     CAPS.correction,

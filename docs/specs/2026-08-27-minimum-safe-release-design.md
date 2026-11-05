@@ -8,7 +8,7 @@ Status: implementation in progress
 
 `claude-memory-kit` is a manual workflow for reviewing cold Claude Code transcripts before retention removes them.
 The workflow proposes source-verified native Markdown memory entries.
-The operator approves each proposed entry before any memory file changes.
+The user approves each proposed entry before any memory file changes.
 The workflow then records and soft-archives only the approved or explicitly rejected transcripts.
 
 The plugin does not replace Claude Code native memory.
@@ -102,7 +102,7 @@ It runs the compiled scan and score commands with `node`.
 It validates the plugin and marketplace metadata with the installed Claude Code CLI when that CLI is available.
 
 All automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture.
-Automated verification must not read, write, or archive files in the operator's real `~/.claude` directory.
+Automated verification must not read, write, or archive files in the user's real `~/.claude` directory.
 It must provide an explicit temporary-fixture scope to every transcript CLI it runs.
 
 The automated test suite must cover path traversal rejection, source containment, collision handling, unreadable JSONL, pending archive recovery, Windows path grouping, duplicate score input, and invalid project caps.
@@ -115,4 +115,4 @@ CI must run build output validation in addition to formatting, type checking, an
 - Hook, MCP, database, or background-worker integration.
 - Cross-project memory recall.
 - Hard deletion of transcripts or archives.
-- A public release until the release gate passes and the operator performs an approved live dry-run.
+- A public release until the release gate passes and the user performs an approved live dry-run.

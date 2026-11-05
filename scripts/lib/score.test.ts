@@ -47,7 +47,7 @@ test("detects a transcript with no valid JSONL entries as unreadable", () => {
   assert.equal(isUnreadableTranscript('{"type":"user"}\n'), false);
 });
 
-// A clearly memory-worthy session: operator corrections, a post-mortem, a commit, honesty marker.
+// A clearly memory-worthy session: user corrections, a post-mortem, a commit, honesty marker.
 const WORTHY = jsonl([
   [
     "user",
@@ -100,7 +100,7 @@ test("memory-worthy session outranks noise and clears SCORE_MIN", () => {
   );
 });
 
-test("worthy session's strongest signal is operator corrections", () => {
+test("worthy session's strongest signal is user corrections", () => {
   const { signals } = scoreTranscript(WORTHY);
   assert.ok(
     signals.correction >= 2,

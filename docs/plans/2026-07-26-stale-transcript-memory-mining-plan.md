@@ -15,7 +15,7 @@ Design: `docs/specs/2026-07-26-stale-transcript-memory-mining-design.md`
 - Phase 3 — skill orchestration: **done** (`SKILL.md` wires scan → score → deep-read → confirm → write → ledger → archive with the guardrails).
 - Phase 4 — soft-archive + write path: **archive helper done** (move-not-delete, collision-safe, 16 tests total).
 - Phase 5 — real dry-run calibration: **blocked** — the oldest transcript on disk is ~22 days, so at `COLD_DAYS=30` there are zero candidates. Run once sessions age past 30 days, or lower `COLD_DAYS` deliberately for a first pass.
-- Phase 6 — first live mining run: **gated** on Phase 5 and operator presence (it writes memory and archives).
+- Phase 6 — first live mining run: **gated** on Phase 5 and user presence (it writes memory and archives).
 
 ## Success criteria
 
@@ -29,7 +29,7 @@ The slice is done when, on a fixture `projects/` tree and then on the real `~/.c
 ## Phase 0 — repo scaffold and conventions
 
 - Add the Claude plugin skeleton: `.claude-plugin/plugin.json`, `skills/mine-stale-transcripts/SKILL.md` (stub), `scripts/`, `tests/`, `README.md`, `.gitignore`, and the tooling manifest for the chosen helper language.
-- Decide helper language (design open question): default to **TypeScript run via the operator's pinned runner** to match existing script toolkits; fall back to POSIX `sh` only if every helper stays trivial.
+- Decide helper language (design open question): default to **TypeScript run via a pinned runner** to match existing script toolkits; fall back to POSIX `sh` only if every helper stays trivial.
 - Verify: `<runner> --version` resolves; lint/format gate runs clean on the empty scaffold.
 
 ## Phase 1 — cold-scan + ledger helpers
@@ -61,11 +61,11 @@ The slice is done when, on a fixture `projects/` tree and then on the real `~/.c
 
 - Run dry-run against the real `~/.claude` (read-only): confirm candidate count is sane, the top-ranked transcripts are genuinely the interesting ones, and low-score noise is correctly demoted.
 - Adjust `COLD_DAYS` / weights if the real distribution disagrees with the fixture; do not change behaviour silently — record any tuning in the design's calibration note.
-- Verify: operator eyeballs the ranked dry-run output and confirms the top candidates are worth mining before any live write.
+- Verify: the user eyeballs the ranked dry-run output and confirms the top candidates are worth mining before any live write.
 
 ## Phase 6 — first live mining run (gated)
 
-- With operator present, run one live batch on a small set (e.g. the top few candidates of a single project), confirm entries, and inspect the written memory + archive + ledger.
+- With the user present, run one live batch on a small set (e.g. the top few candidates of a single project), confirm entries, and inspect the written memory + archive + ledger.
 - Verify: the written memory reads correctly, `~/.claude` git shows only the intended memory files staged, and the mined transcripts are archived and ledgered.
 
 ## Out of scope (this slice)
@@ -76,7 +76,7 @@ The slice is done when, on a fixture `projects/` tree and then on the real `~/.c
 
 ## Risks
 
-- **Scorer false-negatives** drop real value on the floor: mitigated by keeping the archive recoverable (nothing hard-deleted) and by surfacing matched signals for operator spot-checks.
+- **Scorer false-negatives** drop real value on the floor: mitigated by keeping the archive recoverable (nothing hard-deleted) and by surfacing matched signals for user spot-checks.
 - **Context blow-up** on huge transcripts: mitigated by summarise-then-mine and per-run candidate caps.
 - **Account-boundary leakage** into personal memory: mitigated by the explicit account check and ask-don't-infer; verified by including a work-scope transcript in the fixture set and asserting no work identifiers are proposed.
-- **Parallel operator edits** to `~/.claude`: mitigated by path-scoped staging and never bulk-adding.
+- **Parallel user edits** to `~/.claude`: mitigated by path-scoped staging and never bulk-adding.
