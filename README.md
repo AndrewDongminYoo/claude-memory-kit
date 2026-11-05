@@ -5,7 +5,7 @@
 The plugin does not capture memory automatically.
 It does not use hooks, a database, a background worker, or cross-project recall.
 
-Every transcript command requires `CMK_SCOPE_SLUG_PREFIXES` with one or more comma-separated project-slug prefixes that the operator approved for the batch.
+Every transcript command requires `CMK_SCOPE_SLUG_PREFIXES` with one or more comma-separated project-slug prefixes that the user approved for the batch.
 
 ```bash
 export CMK_SCOPE_SLUG_PREFIXES="<approved-slug-prefix-1>,<approved-slug-prefix-2>"
@@ -46,7 +46,7 @@ read-only    read-only         selected     required            agent-owned     
 1. `scan-cold` lists un-mined main-session transcripts in the configured scope that are at least 14 days old by default.
 2. `score-prefilter` selects the highest-value configured-scope transcripts for a deep read and reports malformed JSONL as `unreadable` with a raw-byte fingerprint.
 3. The agent proposes source-backed native Markdown memory entries from selected transcripts.
-4. The operator approves, edits, or rejects each proposal before any memory write.
+4. The user approves, edits, or rejects each proposal before any memory write.
 5. `finalize-transcript` records a pending event.
    It stages and synchronizes the archive payload.
    It records the planned destination before it publishes the hard link.
@@ -79,7 +79,7 @@ An unreadable ledger event is an audit record and does not exclude the transcrip
 - Candidate discovery and prefiltering are read-only.
 - Every transcript command fails closed without an explicit non-empty `CMK_SCOPE_SLUG_PREFIXES` value.
 - The scanner skips an out-of-scope slug before it reads a transcript file.
-- The plugin writes native memory only after an explicit operator decision.
+- The plugin writes native memory only after an explicit user decision.
 - Archive paths must remain under the configured Claude root.
 - The archive rejects traversal, source paths outside `projects/<slug>/`, and symbolic links.
 - Archive destinations use exclusive hard-link creation and preserve existing files with a numeric suffix.
@@ -87,7 +87,7 @@ An unreadable ledger event is an audit record and does not exclude the transcrip
 - The ledger is append-only and excludes pending sessions and unchanged archived sources from new proposals.
 - Ledger reads and writes reject symbolic-link path components and use one verified descriptor for repair and append.
 - An `aborted` archive attempt releases only its matching transcript version for another score and approval.
-- Automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture and never reads or changes the operator's real `~/.claude` data.
+- Automated verification uses a temporary `CLAUDE_CONFIG_DIR` fixture and never reads or changes the user's real `~/.claude` data.
 
 ## Configuration
 

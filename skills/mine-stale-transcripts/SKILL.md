@@ -10,7 +10,7 @@ Promote only approved, source-backed lessons to native Markdown memory.
 Then use the finalizer to preserve the processed transcript.
 
 This workflow is manual.
-Do not write memory or finalize an archive until the operator approves the specific batch action.
+Do not write memory or finalize an archive until the user approves the specific batch action.
 
 The installed plugin requires Node.js 22.23.2 or later.
 Run only the compiled helper files in `${CLAUDE_PLUGIN_ROOT}/dist`.
@@ -70,7 +70,7 @@ Leave it in place and do not write a ledger event until a later score can provid
 Treat a row marked `missing` as a non-finalizable race result.
 Do not deep-read, archive, or ledger it.
 
-After the operator agrees to record the result, preserve its source file and write only its ledger outcome.
+After the user agrees to record the result, preserve its source file and write only its ledger outcome.
 The ledger outcome is an audit record and leaves the unreadable transcript eligible for a later rescore.
 
 ```bash
@@ -85,7 +85,7 @@ Check existing project memory before proposing a duplicate.
 
 Classify the proposed entry as project or global memory according to the native-memory rules.
 Keep work and personal account data separate.
-If the scope is ambiguous, ask the operator instead of inferring it.
+If the scope is ambiguous, ask the user instead of inferring it.
 
 Present proposals grouped by project.
 Show the proposed Markdown body, memory destination, and transcript evidence for each proposal.
@@ -101,7 +101,7 @@ Do not bulk-stage the Claude configuration repository.
 
 ## 6. Finalize the processed transcript
 
-After the approved memory write, or after the operator confirms a rejection or low-score result, run the finalizer once for that transcript.
+After the approved memory write, or after the user confirms a rejection or low-score result, run the finalizer once for that transcript.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/finalize-transcript.js" <transcript.jsonl> <slug> <score> <memory-written|proposed-rejected|skipped-low-score> <fingerprint> [memory.md ...]
