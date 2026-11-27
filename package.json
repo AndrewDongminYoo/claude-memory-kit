@@ -17,7 +17,7 @@
     "verify:plugin": "node dist/verify-plugin.js"
   },
   "devDependencies": {
-    "@types/node": "^26.6.6",
+    "@types/node": "^26.6.10",
     "prettier": "^3.10.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
